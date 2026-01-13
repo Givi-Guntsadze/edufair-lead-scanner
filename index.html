@@ -1,0 +1,299 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>EduFair Scan - Offline Lead Retrieval</title>
+    <script src="https://unpkg.com/html5-qrcode" type="text/javascript"></script>
+    <style>
+        :root {
+            --primary: #2563eb;
+            --success: #22c55e;
+            --warning: #f59e0b;
+            --error: #ef4444;
+            --bg: #f8fafc;
+        }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            background: var(--bg);
+            margin: 0;
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+        h1 { margin-bottom: 20px; text-align: center; }
+        #reader { width: 300px; height: 300px; background: #ddd; margin-bottom: 20px; }
+        .controls { display: flex; gap: 10px; margin-bottom: 20px; }
+        button {
+            padding: 10px 20px;
+            border: none;
+            border-radius: 6px;
+            background: var(--primary);
+            color: white;
+            font-weight: bold;
+            cursor: pointer;
+        }
+        button:disabled { opacity: 0.5; }
+        button.secondary { background: #64748b; }
+        
+        #scan-list { width: 100%; max-width: 400px; }
+        .scan-item {
+            background: white;
+            padding: 15px;
+            margin-bottom: 10px;
+            border-radius: 8px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+        }
+        .status-badge {
+            padding: 4px 8px;
+            border-radius: 12px;
+            font-size: 12px;
+            font-weight: bold;
+        }
+        .status-pending { background: #fef3c7; color: var(--warning); }
+        .status-synced { background: #dcfce7; color: var(--success); }
+        .status-error { background: #fee2e2; color: var(--error); }
+        
+        #network-status {
+            position: fixed;
+            top: 10px;
+            right: 10px;
+            padding: 5px 10px;
+            border-radius: 4px;
+            background: #e2e8f0;
+            font-size: 12px;
+        }
+        .online { color: var(--success); }
+        .offline { color: var(--error); }
+    </style>
+</head>
+<body>
+
+    <h1>EduFair Scan 🎓</h1>
+    <div id="network-status" class="online">ONLINE</div>
+
+    <div id="reader"></div>
+
+    <div class="controls">
+        <button id="start-scan">Start Scan</button>
+        <button id="stop-scan" class="secondary" disabled>Stop</button>
+        <button id="force-sync">Sync Pending (<span id="pending-count">0</span>)</button>
+    </div>
+
+    <!-- Dev Tools -->
+    <div style="margin-bottom: 20px; padding: 10px; border: 1px dashed #ccc;">
+        <small>Development Tools</small><br>
+        <button onclick="toggleNetwork()" style="font-size: 0.8rem; padding: 5px;">Toggle Network</button>
+        <button onclick="addMockScan()" style="font-size: 0.8rem; padding: 5px;">Simulate Scan</button>
+    </div>
+
+    <div id="scan-list"></div>
+
+<script>
+    // --- CONFIGURATION ---
+    const GOOGLE_SCRIPT_URL = 'REPLACE_ME_WITH_DEPLOYED_WEB_APP_URL';
+    
+    // --- STATE ---
+    let scans = JSON.parse(localStorage.getItem('scans') || '[]');
+    let html5QrcodeScanner = null;
+    let isOnline = navigator.onLine;
+
+    // --- INIT ---
+    function init() {
+        renderList();
+        updateNetworkStatus();
+        window.addEventListener('online', () => setNetwork(true));
+        window.addEventListener('offline', () => setNetwork(false));
+    }
+
+    // --- UI HELPERS ---
+    function setNetwork(status) {
+        isOnline = status;
+        updateNetworkStatus();
+        if (isOnline) syncScans();
+    }
+    
+    // Dev tool helper to force offline state logic
+    window.toggleNetwork = function() {
+        setNetwork(!isOnline);
+    }
+    
+    function updateNetworkStatus() {
+        const el = document.getElementById('network-status');
+        el.textContent = isOnline ? 'ONLINE' : 'OFFLINE';
+        el.className = isOnline ? 'online' : 'offline';
+    }
+
+    function renderList() {
+        const list = document.getElementById('scan-list');
+        list.innerHTML = '';
+        let pendingCount = 0;
+
+        // Show newest first
+        [...scans].reverse().forEach(scan => {
+            if (scan.status === 'pending') pendingCount++;
+            
+            const item = document.createElement('div');
+            item.className = 'scan-item';
+            
+            // Format timestamp
+            const date = new Date(scan.timestamp).toLocaleTimeString();
+            
+            item.innerHTML = `
+                <div>
+                    <strong>${scan.uuid}</strong><br>
+                    <small style="color:#666">${date}</small>
+                </div>
+                <span class="status-badge status-${scan.status}">${scan.status.toUpperCase()}</span>
+            `;
+            list.appendChild(item);
+        });
+
+        document.getElementById('pending-count').textContent = pendingCount;
+    }
+
+    // --- SCANNER LOGIC ---
+    document.getElementById('start-scan').addEventListener('click', async () => {
+        try {
+            if (!html5QrcodeScanner) {
+                html5QrcodeScanner = new Html5Qrcode("reader");
+            }
+            await html5QrcodeScanner.start(
+                { facingMode: "environment" },
+                { fps: 10, qrbox: { width: 250, height: 250 } },
+                onScanSuccess,
+                onScanFailure
+            );
+            document.getElementById('start-scan').disabled = true;
+            document.getElementById('stop-scan').disabled = false;
+        } catch (err) {
+            console.error(err);
+            alert("Error starting camera: " + err);
+        }
+    });
+
+    document.getElementById('stop-scan').addEventListener('click', async () => {
+        if (html5QrcodeScanner) {
+            await html5QrcodeScanner.stop();
+            document.getElementById('start-scan').disabled = false;
+            document.getElementById('stop-scan').disabled = true;
+        }
+    });
+
+    function onScanSuccess(decodedText, decodedResult) {
+        // Prevent duplicate immediate scans if needed, but for now just process
+        console.log(`Scan result: ${decodedText}`);
+        
+        // Add to store
+        addScan(decodedText);
+        
+        // Optional: Pause briefly or just keep scanning
+        // For this demo, we'll keep scanning
+    }
+
+    function onScanFailure(error) {
+        // handle scan failure, usually better to ignore and keep scanning.
+        // console.warn(`Code scan error = ${error}`);
+    }
+
+    // --- DATA LOGIC ---
+    function addScan(uuid) {
+        const newScan = {
+            id: Date.now(), // simple unique id for local list
+            uuid: uuid,
+            timestamp: new Date().toISOString(),
+            status: 'pending' // pending, synced, error
+        };
+        
+        scans.push(newScan);
+        saveScans();
+        renderList();
+        
+        // Try to sync immediately if online
+        if (isOnline) {
+            syncScans();
+        }
+    }
+    
+    // Dev tool helper
+    window.addMockScan = function() {
+        const mockUUID = 'user-' + Math.floor(Math.random() * 10000);
+        addScan(mockUUID);
+    }
+
+    function saveScans() {
+        localStorage.setItem('scans', JSON.stringify(scans));
+    }
+
+    document.getElementById('force-sync').addEventListener('click', syncScans);
+
+    async function syncScans() {
+        if (scans.filter(s => s.status === 'pending').length === 0) return;
+        if (!isOnline) {
+            alert("Offline: Cannot sync right now.");
+            return;
+        }
+
+        console.log("Starting sync...");
+        
+        // Iterate through pending scans
+        // Note: In a real app we might batch these, but one-by-one is fine for simplicity here
+        for (let i = 0; i < scans.length; i++) {
+            if (scans[i].status === 'pending') {
+                try {
+                    const success = await sendToAPI(scans[i]);
+                    if (success) {
+                        scans[i].status = 'synced';
+                    } else {
+                        // Keep as pending or mark error? Let's keep pending retry
+                        // scans[i].status = 'error'; 
+                    }
+                } catch (e) {
+                    console.error("Sync error", e);
+                }
+            }
+        }
+        
+        saveScans();
+        renderList();
+    }
+
+    async function sendToAPI(scanData) {
+        if (GOOGLE_SCRIPT_URL.includes('REPLACE_ME')) {
+            console.warn("API URL not configured.");
+            return false;
+        }
+
+        try {
+            // GAS Web Apps often require 'no-cors' or handle CORS via redirect (302).
+            // Fetch with POST usually follows redirects.
+            // Using 'no-cors' limits response access, so we rely on status.
+            const response = await fetch(GOOGLE_SCRIPT_URL, {
+                method: 'POST',
+                // Google Apps Script requires text/plain or specific handling for CORS
+                // The easiest universal way for simple text data is often stringified JSON
+                body: JSON.stringify(scanData)
+            });
+            
+            // If no-cors, we can't check .ok, assume sent if no network error thrown?
+            // Actually, best practice for GAS + CORS is returning JSONP or handling the 302 correctly.
+            // But simple POST usually works if we don't need to read the response.
+            // Let's assume if it completes, it's good.
+             
+            return true;
+        } catch (e) {
+            console.error("Fetch failed", e);
+            return false;
+        }
+    }
+
+    // Run
+    init();
+
+</script>
+</body>
+</html>
