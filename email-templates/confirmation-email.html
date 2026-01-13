@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <meta charset="UTF-8">
+    <title>EduFair - Email Template</title>
+</head>
+
+<body
+    style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background-color: #f8fafc; margin: 0; padding: 40px 20px;">
+
+    <div
+        style="max-width: 600px; margin: 0 auto; background: white; border-radius: 12px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); overflow: hidden;">
+
+        <!-- Header -->
+        <div style="background: linear-gradient(135deg, #2563eb, #7c3aed); padding: 40px 30px; text-align: center;">
+            <h1 style="color: white; margin: 0; font-size: 28px;">Registration Confirmed! 🎓</h1>
+        </div>
+
+        <!-- Body -->
+        <div style="padding: 40px 30px;">
+            <p style="font-size: 16px; color: #334155; line-height: 1.6;">
+                Hi <strong>[your-name]</strong>,
+            </p>
+
+            <p style="font-size: 16px; color: #334155; line-height: 1.6;">
+                Your registration for <strong>EduFair 2026</strong> is confirmed! Here is your personal QR code — keep
+                it ready on your phone.
+            </p>
+
+            <!-- QR Code Section -->
+            <div style="text-align: center; margin: 40px 0; padding: 30px; background: #f1f5f9; border-radius: 12px;">
+                <p
+                    style="font-size: 14px; color: #64748b; margin: 0 0 20px 0; text-transform: uppercase; letter-spacing: 1px;">
+                    Your Entry Pass
+                </p>
+
+                <!-- 
+                    THE MAGIC: QuickChart.io renders the QR on-the-fly
+                    Replace [ticket_id] with your email plugin's dynamic tag
+                -->
+                <img src="https://quickchart.io/qr?text=[ticket_id]&size=250&ecLevel=L&margin=2" alt="Your QR Code"
+                    width="250" height="250" style="border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.1);" />
+
+                <p style="font-size: 12px; color: #94a3b8; margin: 20px 0 0 0; font-family: monospace;">
+                    Ticket ID: <strong>[ticket_id]</strong>
+                </p>
+            </div>
+
+            <!-- Event Details -->
+            <div
+                style="background: #f8fafc; border-left: 4px solid #2563eb; padding: 20px; margin: 30px 0; border-radius: 0 8px 8px 0;">
+                <h3 style="margin: 0 0 15px 0; color: #1e293b; font-size: 16px;">📍 Event Details</h3>
+                <p style="margin: 0; color: #475569; line-height: 1.8; font-size: 14px;">
+                    <strong>Date:</strong> February 15, 2026<br>
+                    <strong>Time:</strong> 10:00 AM - 5:00 PM<br>
+                    <strong>Venue:</strong> Grand Convention Center<br>
+                    <strong>Address:</strong> 123 Education Street, Dubai
+                </p>
+            </div>
+
+            <p style="font-size: 16px; color: #334155; line-height: 1.6;">
+                Show this QR code at any university booth to share your contact information with them instantly.
+            </p>
+
+            <p style="font-size: 16px; color: #334155; line-height: 1.6;">
+                See you there!<br>
+                <strong>The EduFair Team</strong>
+            </p>
+        </div>
+
+        <!-- Footer -->
+        <div style="background: #f1f5f9; padding: 20px 30px; text-align: center; border-top: 1px solid #e2e8f0;">
+            <p style="margin: 0; font-size: 12px; color: #94a3b8;">
+                Questions? Reply to this email or visit our website.
+            </p>
+        </div>
+
+    </div>
+
+</body>
+
+</html>
+
+<!--
+=============================================================================
+USAGE INSTRUCTIONS
+=============================================================================
+
+1. COPY THE HTML ABOVE into your email automation tool (n8n, CF7 Mail, etc.)
+
+2. REPLACE THESE PLACEHOLDERS with your tool's dynamic tags:
+   - [your-name]  → The registrant's name field
+   - [ticket_id]  → The generated UUID/ticket_id
+
+3. HOW THE QR WORKS:
+   - QuickChart.io renders the QR code on-the-fly when the email is opened
+   - No images are stored on your server
+   - The same URL works for reminder emails too
+
+4. QUICKCHART PARAMETERS:
+   - text=[ticket_id]  → The data to encode (just the ID)
+   - size=250          → Image size in pixels
+   - ecLevel=L         → Error correction (L=7%, M=15%, Q=25%, H=30%)
+   - margin=2          → Quiet zone around QR
+
+5. ALTERNATIVE QR APIS (if QuickChart is blocked):
+   - goqr.me: https://api.qrserver.com/v1/create-qr-code/?size=250x250&data=[ticket_id]
+   - Google Charts: https://chart.googleapis.com/chart?cht=qr&chs=250x250&chl=[ticket_id]
+
+=============================================================================
+-->

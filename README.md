@@ -1,103 +1,151 @@
-# EduFair Live Scanner
+# EduFair Lead Scanner
 
-A lightweight, offline-first PWA for capturing event leads via QR code scanning.
+A complete lead retrieval system for education fairs. Enables 30+ universities to digitally collect leads from 3000+ attendees using their smartphones.
 
-## How It Works
+## Architecture Overview
 
-1. **Attendees** have a QR code (from their confirmation email) containing their unique ID.
-2. **University volunteers** open the scanner app on their phones.
-3. **Scans are saved locally** first (works offline), then synced to Google Sheets.
-
----
-
-## Setup Instructions
-
-### Step 1: Deploy the Backend (Google Apps Script)
-
-1. Go to [Google Sheets](https://sheets.google.com) and create a new spreadsheet.
-2. Name it something like `EduFair_Raw_Scans`.
-3. Go to **Extensions → Apps Script**.
-4. Delete any existing code and paste the contents of `Code.gs`.
-5. Click **Run → setup** (first time only, to create the sheet).
-6. Click **Deploy → New deployment**.
-7. Configure:
-   - **Type**: Web app
-   - **Execute as**: Me
-   - **Who has access**: Anyone
-8. Click **Deploy** and copy the Web App URL.
-
-### Step 2: Configure the Frontend
-
-1. Open `index.html` in a text editor.
-2. Find line ~147:
-   ```javascript
-   const API_URL = "YOUR_GOOGLE_SCRIPT_WEB_APP_URL_HERE";
-   ```
-3. Replace the placeholder with your Web App URL from Step 1.
-4. Save the file.
-
-### Step 3: Host the App
-
-**Option A: GitHub Pages (Recommended)**
-1. Push this repo to GitHub.
-2. Go to **Settings → Pages**.
-3. Set Source to `main` branch, `/ (root)` folder.
-4. Your app will be live at `https://yourusername.github.io/repo-name/`
-
-**Option B: Any Static Host**
-- Simply upload `index.html` to Netlify, Vercel, or any web server.
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                         REGISTRATION PHASE                          │
+├─────────────────────────────────────────────────────────────────────┤
+│  User → CF7 Form → PHP generates UUID → Google Sheet + Email w/ QR  │
+└─────────────────────────────────────────────────────────────────────┘
+                                  ↓
+┌─────────────────────────────────────────────────────────────────────┐
+│                           EVENT DAY                                  │
+├─────────────────────────────────────────────────────────────────────┤
+│  Volunteer opens ?uni=HARVARD → Scans QR → localStorage → Sheet     │
+└─────────────────────────────────────────────────────────────────────┘
+                                  ↓
+┌─────────────────────────────────────────────────────────────────────┐
+│                          POST-EVENT                                  │
+├─────────────────────────────────────────────────────────────────────┤
+│  Download CSVs → Run Python script → leads_HARVARD.csv per uni      │
+└─────────────────────────────────────────────────────────────────────┘
+```
 
 ---
 
-## Usage
+## Project Structure
 
-### Creating Scanner Links for Each University
-
-Each university gets their own URL with a `?uni=` parameter:
-
-| University | Scanner URL |
-|------------|-------------|
-| Harvard    | `https://yoursite.com/?uni=HARVARD` |
-| Yale       | `https://yoursite.com/?uni=YALE` |
-| MIT        | `https://yoursite.com/?uni=MIT` |
-
-**Tip**: Generate QR codes for these URLs so volunteers can quickly open the scanner.
-
-### Scanning Flow
-
-1. Volunteer opens their university's scanner link.
-2. Points camera at attendee's QR badge.
-3. Screen flashes **green** → "Saved!"
-4. Data syncs to Google Sheets automatically.
-
-### Offline Mode
-
-- If Wi-Fi is down, scans are stored locally on the device.
-- A yellow counter shows "X pending uploads".
-- When connection returns, data syncs automatically.
-- You can also tap "Sync Now" to force a retry.
+```
+edufair-lead-scanner/
+├── index.html                    # Scanner PWA (deploy to GitHub Pages)
+├── Code.gs                       # Google Apps Script (deploy as Web App)
+├── wordpress/
+│   └── ticket-id-generator.php   # CF7 UUID generation snippet
+├── email-templates/
+│   └── confirmation-email.html   # Email template with QR code
+├── scripts/
+│   └── process_leads.py          # Post-event lead splitting
+├── requirements.txt              # Python dependencies
+└── .gitignore
+```
 
 ---
 
-## Data Output
+## Setup Guide
 
-Your Google Sheet (`Raw_Scans` tab) will contain:
+### Phase 1: Registration System (WordPress)
 
-| Timestamp | Uni_ID | UUID |
-|-----------|--------|------|
-| 2026-01-13 10:45:00 | HARVARD | A1B2-C3D4 |
-| 2026-01-13 10:46:12 | HARVARD | E5F6-G7H8 |
-| 2026-01-13 10:47:05 | YALE | A1B2-C3D4 |
+#### 1.1 Add Hidden Field to CF7 Form
+```
+[hidden ticket_id id:ticket_id default:get]
+```
 
-This raw data can later be joined with your registration database to get full attendee details.
+#### 1.2 Install the UUID Generator
+Copy `wordpress/ticket-id-generator.php` into:
+- **WPCode plugin** (recommended), OR
+- Your theme's `functions.php`
+
+#### 1.3 Map to Google Sheet
+Ensure your CF7-to-Sheet connector includes the `ticket_id` field.
+
+Your sheet should have these columns:
+| Name | Email | Phone | ... | ticket_id |
+|------|-------|-------|-----|-----------|
+
+#### 1.4 Configure Confirmation Email
+In your email automation (n8n, CF7 Mail, etc.), use this QR code snippet:
+
+```html
+<img src="https://quickchart.io/qr?text=[ticket_id]&size=250" alt="QR" />
+```
+
+See `email-templates/confirmation-email.html` for a full template.
 
 ---
 
-## Troubleshooting
+### Phase 2: Scanner App (Event Day)
 
-| Issue | Solution |
-|-------|----------|
-| "Configuration Error" on load | Add `?uni=NAME` to the URL |
-| Camera not working | Check browser permissions, use HTTPS |
-| Scans stuck as "pending" | Check your API_URL, verify Web App is deployed |
-| Duplicate scans ignored | This is intentional—same UUID won't be added twice |
+#### 2.1 Deploy Google Apps Script
+
+1. Open your Google Sheet
+2. **Extensions → Apps Script**
+3. Paste contents of `Code.gs`
+4. **Deploy → New deployment → Web App**
+   - Execute as: Me
+   - Access: Anyone
+5. Copy the Web App URL
+
+#### 2.2 Configure the Scanner
+
+1. Open `index.html`
+2. Line ~239: Paste your Web App URL
+3. Commit and push to GitHub
+4. Enable GitHub Pages (Settings → Pages → main branch)
+
+#### 2.3 Create University Links
+
+| University | URL |
+|------------|-----|
+| Harvard | `https://yoursite.github.io/edufair-lead-scanner/?uni=HARVARD` |
+| Yale | `https://yoursite.github.io/edufair-lead-scanner/?uni=YALE` |
+| MIT | `https://yoursite.github.io/edufair-lead-scanner/?uni=MIT` |
+
+---
+
+### Phase 3: Post-Event Processing
+
+#### 3.1 Export Data
+
+1. From your Registration Sheet → Download as `registrations.csv`
+2. From `Raw_Scans` tab → Download as `raw_scans.csv`
+
+#### 3.2 Run the Script
+
+```bash
+# Install dependencies
+pip install -r requirements.txt
+
+# Process leads
+python scripts/process_leads.py
+```
+
+#### 3.3 Output
+
+```
+reports/
+├── leads_HARVARD.csv
+├── leads_YALE.csv
+├── leads_MIT.csv
+└── ...
+```
+
+---
+
+## Testing
+
+See [TESTING.md](TESTING.md) for:
+- Automated test results
+- Manual testing steps
+- Troubleshooting guide
+
+---
+
+## Key Features
+
+- **Offline-First**: Scans saved to device, sync when online
+- **Concurrent-Safe**: LockService handles 30+ simultaneous writers
+- **Zero Server Cost**: GitHub Pages + Google Sheets
+- **Dynamic QR**: No image storage, QuickChart renders on-the-fly
