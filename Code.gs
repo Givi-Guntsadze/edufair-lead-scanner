@@ -3,33 +3,65 @@
  * 
  * This script receives scan data from the PWA and appends it to the active sheet.
  * Deploy as: Web App | Execute as: Me | Access: Anyone
+ * 
+ * IMPORTANT: After updating this code, you MUST create a NEW deployment
+ * (Deploy -> New Deployment), not just save. Then update the URL in index.html.
  */
 
+/**
+ * Handle GET requests (browser redirects often convert POST to GET)
+ */
+function doGet(e) {
+  return handleRequest(e, 'GET');
+}
+
+/**
+ * Handle POST requests
+ */
 function doPost(e) {
-  // Use lock to handle concurrent requests from multiple scanners
+  return handleRequest(e, 'POST');
+}
+
+/**
+ * Unified request handler for both GET and POST
+ */
+function handleRequest(e, method) {
   const lock = LockService.getScriptLock();
   
   try {
-    // Wait up to 10 seconds for lock (handles 30+ simultaneous scanners)
     lock.waitLock(10000);
   } catch (err) {
-    return ContentService
-      .createTextOutput(JSON.stringify({ result: 'error', message: 'Server busy, please retry' }))
-      .setMimeType(ContentService.MimeType.JSON);
+    return createResponse({ result: 'error', message: 'Server busy' });
   }
 
   try {
-    // Parse incoming data
-    const data = JSON.parse(e.postData.contents);
-    
-    // Validate required fields
-    if (!data.uni || !data.uuid) {
-      return ContentService
-        .createTextOutput(JSON.stringify({ result: 'error', message: 'Missing uni or uuid' }))
-        .setMimeType(ContentService.MimeType.JSON);
+    let data = null;
+
+    // Parse data based on request type
+    if (method === 'POST' && e.postData && e.postData.contents) {
+      data = JSON.parse(e.postData.contents);
+    } else if (e.parameter && e.parameter.data) {
+      // Handle data passed as URL parameter
+      data = JSON.parse(e.parameter.data);
+    } else if (e.parameter && e.parameter.uni && e.parameter.uuid) {
+      // Handle individual URL parameters
+      data = {
+        uni: e.parameter.uni,
+        uuid: e.parameter.uuid,
+        timestamp: e.parameter.timestamp || new Date().toISOString()
+      };
     }
 
-    // Get or create the Raw_Scans sheet
+    // Validate
+    if (!data || !data.uni || !data.uuid) {
+      return createResponse({ 
+        result: 'error', 
+        message: 'Missing data. Required: uni, uuid',
+        received: e.parameter || 'none'
+      });
+    }
+
+    // Get or create sheet
     const ss = SpreadsheetApp.getActiveSpreadsheet();
     let sheet = ss.getSheetByName('Raw_Scans');
     
@@ -39,25 +71,30 @@ function doPost(e) {
       sheet.getRange(1, 1, 1, 3).setFontWeight('bold');
     }
 
-    // Append the scan data
+    // Append data
     const timestamp = data.timestamp ? new Date(data.timestamp) : new Date();
     sheet.appendRow([timestamp, data.uni, data.uuid]);
 
-    return ContentService
-      .createTextOutput(JSON.stringify({ result: 'success', row: sheet.getLastRow() }))
-      .setMimeType(ContentService.MimeType.JSON);
+    return createResponse({ result: 'success', row: sheet.getLastRow() });
 
   } catch (err) {
-    return ContentService
-      .createTextOutput(JSON.stringify({ result: 'error', message: err.toString() }))
-      .setMimeType(ContentService.MimeType.JSON);
+    return createResponse({ result: 'error', message: err.toString() });
   } finally {
     lock.releaseLock();
   }
 }
 
 /**
- * Optional: Run this once to create the Raw_Scans sheet with headers
+ * Create a properly formatted response
+ */
+function createResponse(data) {
+  return ContentService
+    .createTextOutput(JSON.stringify(data))
+    .setMimeType(ContentService.MimeType.JSON);
+}
+
+/**
+ * Run once to create the Raw_Scans sheet
  */
 function setup() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
@@ -67,8 +104,8 @@ function setup() {
     sheet = ss.insertSheet('Raw_Scans');
     sheet.appendRow(['Timestamp', 'Uni_ID', 'UUID']);
     sheet.getRange(1, 1, 1, 3).setFontWeight('bold');
-    Logger.log('Created Raw_Scans sheet with headers');
+    Logger.log('Created Raw_Scans sheet');
   } else {
-    Logger.log('Raw_Scans sheet already exists');
+    Logger.log('Raw_Scans sheet exists');
   }
 }
