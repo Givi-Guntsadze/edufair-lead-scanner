@@ -329,21 +329,27 @@
 
             for (const scan of pending) {
                 try {
-                    const response = await fetch(API_URL, {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({
-                            uni: scan.uni,
-                            uuid: scan.uuid,
-                            timestamp: scan.timestamp
-                        })
+                    // Use GET with URL parameters - more reliable with Google Apps Script
+                    const params = new URLSearchParams({
+                        uni: scan.uni,
+                        uuid: scan.uuid,
+                        timestamp: scan.timestamp
                     });
 
-                    // With CORS mode, we can check .ok
-                    // For no-cors fallback, we assume success if no error thrown
-                    if (response.ok || response.type === 'opaque') {
-                        markSynced(scan.id);
-                        updateScanItemUI(scan.id, 'synced');
+                    const response = await fetch(`${API_URL}?${params.toString()}`, {
+                        method: 'GET',
+                        redirect: 'follow'
+                    });
+
+                    // Check if we got a valid response
+                    if (response.ok) {
+                        const result = await response.json();
+                        if (result.result === 'success') {
+                            markSynced(scan.id);
+                            updateScanItemUI(scan.id, 'synced');
+                        } else {
+                            console.error('Sync error:', result.message);
+                        }
                     }
                 } catch (error) {
                     console.error('Sync failed for', scan.uuid, error);
