@@ -285,6 +285,14 @@
             localStorage.setItem(STORAGE_KEY, JSON.stringify(scanQueue));
         }
 
+        function generateScanId() {
+            if (window.crypto && typeof window.crypto.randomUUID === 'function') {
+                return window.crypto.randomUUID();
+            }
+
+            return `scan-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+        }
+
         function addToQueue(uuid) {
             // Prevent duplicate UUIDs (same person scanned twice in quick succession)
             if (scanQueue.some(s => s.uuid === uuid)) {
@@ -293,7 +301,7 @@
             }
 
             const scanData = {
-                id: Date.now(),
+                id: generateScanId(),
                 uni: UNI_ID,
                 uuid: uuid,
                 timestamp: new Date().toISOString(),
