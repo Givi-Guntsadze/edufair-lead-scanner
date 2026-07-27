@@ -105,6 +105,7 @@ function handleScanRequest(e) {
         neutralizeFormula(participant.id),
         neutralizeFormula(data.uuid)
       ]);
+      SpreadsheetApp.flush();
 
       return createResponse({ result: 'success', duplicate: false });
     } finally {

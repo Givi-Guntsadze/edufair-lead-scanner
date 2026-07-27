@@ -159,6 +159,7 @@ function createEnvironment(
 ) {
   const spreadsheet = new FakeSpreadsheet(sheetDefinitions);
   let lockReleases = 0;
+  const lockEvents = [];
   const loggedErrors = [];
   const openedSpreadsheetIds = [];
   const scriptProperties = new Map();
@@ -183,12 +184,16 @@ function createEnvironment(
       getScriptLock() {
         return {
           waitLock() {},
-          releaseLock() { lockReleases += 1; }
+          releaseLock() {
+            lockReleases += 1;
+            lockEvents.push('release');
+          }
         };
       }
     },
     SpreadsheetApp: {
       getActiveSpreadsheet: () => activeSpreadsheetAvailable ? spreadsheet : null,
+      flush() { lockEvents.push('flush'); },
       openById(id) {
         openedSpreadsheetIds.push(id);
         if (id !== SCAN_SPREADSHEET_ID) throw new Error('Unexpected spreadsheet ID');
@@ -224,7 +229,8 @@ function createEnvironment(
     loggedErrors,
     openedSpreadsheetIds,
     scriptProperties,
-    lockReleases: () => lockReleases
+    lockReleases: () => lockReleases,
+    lockEvents: () => [...lockEvents]
   };
 }
 
@@ -258,7 +264,7 @@ function postRequest(context, {
 }
 
 {
-  const { context, spreadsheet, lockReleases } = createEnvironment();
+  const { context, spreadsheet, lockReleases, lockEvents } = createEnvironment();
   const rawScans = spreadsheet.getSheetByName('Raw_Scans');
 
   assert.deepEqual(parseResponse(context.doGet({ parameter: {} })), {
@@ -275,6 +281,11 @@ function postRequest(context, {
   assert.equal(rawScans.rows[1][1], 'constructor');
   assert.equal(rawScans.rows[1][2], 'A1B2C3D4');
   assert.equal(lockReleases(), 1);
+  assert.deepEqual(
+    lockEvents(),
+    ['flush', 'release'],
+    'pending spreadsheet writes must flush before releasing the script lock'
+  );
 
   assert.deepEqual(postRequest(context), {
     result: 'success',
@@ -282,6 +293,7 @@ function postRequest(context, {
   });
   assert.equal(rawScans.getLastRow(), 2, 'duplicate scans must not append');
   assert.equal(lockReleases(), 2);
+  assert.deepEqual(lockEvents(), ['flush', 'release', 'release']);
 }
 
 for (const [label, request, expectedCode] of [
