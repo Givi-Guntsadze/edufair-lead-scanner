@@ -100,8 +100,10 @@ After the live matrix:
 - The Apps Script code contains no registration workbook ID or `openByUrl` call.
 - Its single `openById` call receives only the `SCAN_SPREADSHEET_ID` recorded by
   `setup` from the bound `fair-scan-file` project.
-- The old Apps Script deployment is removed from the registration workbook after
-  the new deployment succeeds.
+- After the new deployment succeeds, the old registration-workbook web-app
+  deployment is archived through **Deploy -> Manage deployments -> Archive**.
+  Deleting only its current script source is not treated as disabling the old
+  versioned deployment.
 
 ## Post-event Smoke Test
 

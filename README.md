@@ -164,6 +164,13 @@ For later Apps Script updates, use **Deploy -> Manage deployments**, edit the
 active deployment, select a new version, and deploy. That preserves the `/exec`
 URL.
 
+After the new deployment passes the live verification matrix, open the Apps
+Script project formerly bound to the registration workbook and select
+**Deploy -> Manage deployments -> Archive** for its old web-app deployment.
+Deleting or replacing the editor source alone does not disable a versioned
+deployment, because the active deployment continues serving its selected code
+version until it is updated or archived.
+
 ## 6. Publish the Scanner
 
 The production scanner is hosted at:
