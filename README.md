@@ -92,7 +92,10 @@ contains a bearer token and must be treated like a credential.
 6. Run `setup` once from the Apps Script editor and authorize it. The function
    verifies the three tabs and exact headers without overwriting existing data.
 
-The code uses `@OnlyCurrentDoc` and must remain bound to `fair-scan-file`.
+When run from the editor, `setup` records the bound `fair-scan-file` ID in Apps
+Script Properties. Google does not make bound-file "active spreadsheet" methods
+available during web-app execution, so the public receiver opens only that
+recorded scanner-workbook ID. The project contains no registration-workbook ID.
 Do not paste or deploy it from the registration workbook.
 
 ## 4. Generate Participant URLs

@@ -97,8 +97,9 @@ After the live matrix:
 - `Raw_Scans` contains only timestamp, participant ID, and UUID.
 - `valid_tickets` contains UUIDs only.
 - `participant_url` contains no registration PII.
-- The Apps Script code contains no registration workbook ID and no
-  `SpreadsheetApp.openById`/`openByUrl` call.
+- The Apps Script code contains no registration workbook ID or `openByUrl` call.
+- Its single `openById` call receives only the `SCAN_SPREADSHEET_ID` recorded by
+  `setup` from the bound `fair-scan-file` project.
 - The old Apps Script deployment is removed from the registration workbook after
   the new deployment succeeds.
 

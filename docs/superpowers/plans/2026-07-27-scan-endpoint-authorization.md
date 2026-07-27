@@ -107,10 +107,6 @@ participant allowlist, valid-ticket lookup, or duplicate protection.
 Replace the receiver with these interfaces and behavior:
 
 ```javascript
-/**
- * @OnlyCurrentDoc
- */
-
 const SCAN_SHEETS = Object.freeze({
   RAW_SCANS: 'Raw_Scans',
   PARTICIPANTS: 'participant_url',
@@ -144,7 +140,7 @@ function handleScanRequest(e) {
   }
 
   try {
-    const spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
+    const spreadsheet = getConfiguredScanSpreadsheet();
     const participants = requireSheetWithHeaders(
       spreadsheet,
       SCAN_SHEETS.PARTICIPANTS,
@@ -193,6 +189,16 @@ function handleScanRequest(e) {
     console.error('Scan receiver error: ' + String(error));
     return createResponse({ result: 'error', code: 'server_error' });
   }
+}
+
+function getConfiguredScanSpreadsheet() {
+  const spreadsheetId = PropertiesService
+    .getScriptProperties()
+    .getProperty('SCAN_SPREADSHEET_ID');
+  if (!/^[A-Za-z0-9_-]{20,}$/.test(spreadsheetId || '')) {
+    throw new Error('Scanner workbook is not configured. Run setup first.');
+  }
+  return SpreadsheetApp.openById(spreadsheetId);
 }
 ```
 
@@ -531,8 +537,9 @@ git diff --check
 ```
 
 Expected: only `doPost` reaches `appendRow` for scans, no registration-workbook
-deployment URL remains, no `SpreadsheetApp.open*` call exists, the token is
-never rendered or placed in a request URL, and whitespace checks pass.
+deployment URL or ID remains, the single `SpreadsheetApp.openById` call reads
+the ID recorded by `setup` from Script Properties, the token is never rendered
+or placed in a request URL, and whitespace checks pass.
 
 - [ ] **Step 3: Review the complete branch diff**
 

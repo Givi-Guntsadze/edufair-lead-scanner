@@ -151,10 +151,15 @@ release; there is no fallback that puts the bearer token into a GET URL.
 
 ## Least Privilege and Data Handling
 
-The Apps Script is bound only to `fair-scan-file`, never opens the registration
-workbook, and uses the narrowest verified current-spreadsheet authorization
-scope. It returns only generic result codes and never returns sheet rows,
-participant names, token hashes, raw tokens, or registration data.
+The Apps Script is bound only to `fair-scan-file` and never stores or opens the
+registration workbook ID. Because Google does not expose bound-file active
+spreadsheet methods during web-app execution, the organizer-run `setup`
+function records the bound scanner-workbook ID in Script Properties. The public
+receiver opens only that configured ID. Apps Script's spreadsheet OAuth scope
+is not file-specific in this execution mode, so the separate PII-free workbook
+and the fixed code path provide the data-isolation boundary. Responses contain
+only generic result codes and never include sheet rows, participant names,
+token hashes, raw tokens, or registration data.
 
 Security-relevant values are derived server-side. Participant IDs and UUIDs
 retain strict validation, and spreadsheet-formula neutralization remains as

@@ -6,6 +6,7 @@ const vm = require('node:vm');
 const VALID_TOKEN = 'a'.repeat(64);
 const UNKNOWN_TOKEN = 'c'.repeat(64);
 const INACTIVE_TOKEN = 'b'.repeat(64);
+const SCAN_SPREADSHEET_ID = '1FairScanWorkbookIdForAuthorizationTests';
 
 function sha256(value) {
   return crypto.createHash('sha256').update(value, 'utf8').digest('hex');
@@ -113,6 +114,10 @@ class FakeSpreadsheet {
     this.sheets.set(name, sheet);
     return sheet;
   }
+
+  getId() {
+    return SCAN_SPREADSHEET_ID;
+  }
 }
 
 function defaultSheets() {
@@ -145,10 +150,21 @@ function defaultSheets() {
   };
 }
 
-function createEnvironment(sheetDefinitions = defaultSheets()) {
+function createEnvironment(
+  sheetDefinitions = defaultSheets(),
+  {
+    activeSpreadsheetAvailable = true,
+    configuredSpreadsheetId = SCAN_SPREADSHEET_ID
+  } = {}
+) {
   const spreadsheet = new FakeSpreadsheet(sheetDefinitions);
   let lockReleases = 0;
   const loggedErrors = [];
+  const openedSpreadsheetIds = [];
+  const scriptProperties = new Map();
+  if (configuredSpreadsheetId) {
+    scriptProperties.set('SCAN_SPREADSHEET_ID', configuredSpreadsheetId);
+  }
   const context = {
     console: {
       error(message) { loggedErrors.push(String(message)); },
@@ -172,7 +188,22 @@ function createEnvironment(sheetDefinitions = defaultSheets()) {
       }
     },
     SpreadsheetApp: {
-      getActiveSpreadsheet: () => spreadsheet
+      getActiveSpreadsheet: () => activeSpreadsheetAvailable ? spreadsheet : null,
+      openById(id) {
+        openedSpreadsheetIds.push(id);
+        if (id !== SCAN_SPREADSHEET_ID) throw new Error('Unexpected spreadsheet ID');
+        return spreadsheet;
+      }
+    },
+    PropertiesService: {
+      getScriptProperties() {
+        return {
+          getProperty: key => scriptProperties.get(key) ?? null,
+          setProperty(key, value) {
+            scriptProperties.set(key, value);
+          }
+        };
+      }
     },
     Utilities: {
       DigestAlgorithm: { SHA_256: 'SHA_256' },
@@ -187,7 +218,14 @@ function createEnvironment(sheetDefinitions = defaultSheets()) {
 
   vm.createContext(context);
   vm.runInContext(fs.readFileSync('Code.gs', 'utf8'), context, { filename: 'Code.gs' });
-  return { context, spreadsheet, loggedErrors, lockReleases: () => lockReleases };
+  return {
+    context,
+    spreadsheet,
+    loggedErrors,
+    openedSpreadsheetIds,
+    scriptProperties,
+    lockReleases: () => lockReleases
+  };
 }
 
 function parseResponse(output) {
@@ -276,6 +314,40 @@ for (const [label, request, expectedCode] of [
   assert.deepEqual(response, { result: 'error', code: 'server_error' });
   assert.equal(loggedErrors.length, 1);
   assert.doesNotMatch(JSON.stringify(response), new RegExp(VALID_TOKEN));
+}
+
+{
+  const harness = createEnvironment(defaultSheets(), {
+    activeSpreadsheetAvailable: false
+  });
+  assert.deepEqual(postRequest(harness.context), {
+    result: 'success',
+    duplicate: false
+  });
+  assert.deepEqual(harness.openedSpreadsheetIds, [SCAN_SPREADSHEET_ID]);
+}
+
+{
+  const harness = createEnvironment(defaultSheets(), {
+    activeSpreadsheetAvailable: false,
+    configuredSpreadsheetId: null
+  });
+  assert.deepEqual(postRequest(harness.context), {
+    result: 'error',
+    code: 'server_error'
+  });
+  assert.deepEqual(harness.openedSpreadsheetIds, []);
+}
+
+{
+  const harness = createEnvironment(defaultSheets(), {
+    configuredSpreadsheetId: null
+  });
+  harness.context.setup();
+  assert.equal(
+    harness.scriptProperties.get('SCAN_SPREADSHEET_ID'),
+    SCAN_SPREADSHEET_ID
+  );
 }
 
 for (const value of [

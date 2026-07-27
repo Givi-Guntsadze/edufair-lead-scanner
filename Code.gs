@@ -1,8 +1,4 @@
 /**
- * @OnlyCurrentDoc
- */
-
-/**
  * EduFair Lead Receiver - Google Apps Script
  *
  * Bind this project only to the private, PII-free fair-scan-file workbook.
@@ -31,6 +27,8 @@ const TOKEN_PATTERN = /^[a-f0-9]{64}$/;
 const TICKET_ID_PATTERN = /^[A-Z0-9]{8}$/;
 const ISO_TIMESTAMP_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
 const MAX_PARTICIPANT_ID_LENGTH = 50;
+const SCAN_SPREADSHEET_ID_PROPERTY = 'SCAN_SPREADSHEET_ID';
+const SPREADSHEET_ID_PATTERN = /^[A-Za-z0-9_-]{20,}$/;
 
 /**
  * GET is deliberately non-mutating. Scan credentials belong in a POST body,
@@ -58,7 +56,7 @@ function handleScanRequest(e) {
   }
 
   try {
-    const spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
+    const spreadsheet = getConfiguredScanSpreadsheet();
     const participantSheet = requireSheetWithHeaders(
       spreadsheet,
       SCAN_SHEETS.PARTICIPANTS,
@@ -118,6 +116,20 @@ function handleScanRequest(e) {
     console.error('Scan receiver error: ' + String(error));
     return createResponse({ result: 'error', code: 'server_error' });
   }
+}
+
+function getConfiguredScanSpreadsheet() {
+  const spreadsheetId = PropertiesService
+    .getScriptProperties()
+    .getProperty(SCAN_SPREADSHEET_ID_PROPERTY);
+
+  if (!SPREADSHEET_ID_PATTERN.test(spreadsheetId || '')) {
+    throw new Error('Scanner workbook is not configured. Run setup first.');
+  }
+
+  // Bound-script active-file methods are unavailable in web-app executions.
+  // The organizer-run setup function records only fair-scan-file's ID.
+  return SpreadsheetApp.openById(spreadsheetId);
 }
 
 function parsePostParameters(e) {
@@ -275,6 +287,22 @@ function createResponse(data) {
  */
 function setup() {
   const spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
+  if (!spreadsheet) {
+    throw new Error('Run setup from the Apps Script project bound to fair-scan-file.');
+  }
+
+  const spreadsheetId = spreadsheet.getId();
+  if (!SPREADSHEET_ID_PATTERN.test(spreadsheetId || '')) {
+    throw new Error('Unable to determine a valid fair-scan-file spreadsheet ID.');
+  }
+
+  const scriptProperties = PropertiesService.getScriptProperties();
+  const configuredId = scriptProperties.getProperty(SCAN_SPREADSHEET_ID_PROPERTY);
+  if (configuredId && configuredId !== spreadsheetId) {
+    throw new Error('This Apps Script project is already configured for another workbook.');
+  }
+  scriptProperties.setProperty(SCAN_SPREADSHEET_ID_PROPERTY, spreadsheetId);
+
   ensureAdministrativeSheet(
     spreadsheet,
     SCAN_SHEETS.RAW_SCANS,
