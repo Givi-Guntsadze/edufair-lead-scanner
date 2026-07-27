@@ -14,13 +14,13 @@ A complete lead retrieval system for education fairs. Enables 30+ universities t
 ┌─────────────────────────────────────────────────────────────────────┐
 │                           EVENT DAY                                  │
 ├─────────────────────────────────────────────────────────────────────┤
-│  Volunteer opens ?uni=HARVARD → Scans QR → localStorage → Sheet     │
+│  Volunteer opens ?uni=CUSTOM_ID → Scans QR → localStorage → Sheet   │
 └─────────────────────────────────────────────────────────────────────┘
                                   ↓
 ┌─────────────────────────────────────────────────────────────────────┐
 │                          POST-EVENT                                  │
 ├─────────────────────────────────────────────────────────────────────┤
-│  Download CSVs → Run Python script → leads_HARVARD.csv per uni      │
+│  Download CSVs → Run Python script → leads_CUSTOM_ID.csv per uni    │
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -98,11 +98,20 @@ See `email-templates/confirmation-email.html` for a full template.
 
 #### 2.3 Create University Links
 
-| University | URL |
-|------------|-----|
-| Harvard | `https://yoursite.github.io/edufair-lead-scanner/?uni=HARVARD` |
-| Yale | `https://yoursite.github.io/edufair-lead-scanner/?uni=YALE` |
-| MIT | `https://yoursite.github.io/edufair-lead-scanner/?uni=MIT` |
+You choose the `uni` identifier for each university; the scanner does not use a
+built-in university list. Use a stable custom identifier of 1-50 characters.
+Lowercase letters, internal spaces, `/`, and non-Latin abbreviations are
+supported. URL-encode characters such as spaces (`%20`) and `/` (`%2F`).
+
+The identifier cannot have surrounding whitespace, begin with a spreadsheet
+formula character (`=`, `+`, `-`, or `@`, including after leading apostrophes),
+or contain control/filename-unsafe characters (`< > : " \ | ? *`).
+
+| Your custom identifier | URL |
+|------------------------|-----|
+| `TSU-2026` | `https://yoursite.github.io/edufair-lead-scanner/?uni=TSU-2026` |
+| `Tbilisi Campus` | `https://yoursite.github.io/edufair-lead-scanner/?uni=Tbilisi%20Campus` |
+| `NABA/IU` | `https://yoursite.github.io/edufair-lead-scanner/?uni=NABA%2FIU` |
 
 ---
 
@@ -127,9 +136,9 @@ python scripts/process_leads.py
 
 ```
 reports/
-├── leads_HARVARD.csv
-├── leads_YALE.csv
-├── leads_MIT.csv
+├── leads_CUSTOM_ID_1.csv
+├── leads_CUSTOM_ID_2.csv
+├── leads_CUSTOM_ID_3.csv
 └── ...
 ```
 

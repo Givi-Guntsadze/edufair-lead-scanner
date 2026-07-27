@@ -9,12 +9,21 @@ I've already tested the app in-browser. Here are the results:
 | Test | Status | Details |
 |------|--------|---------|
 | UI loads correctly | ✅ PASS | All elements render properly |
-| URL parameter works | ✅ PASS | `?uni=HARVARD` displays correctly |
+| URL parameter works | ✅ PASS | Organizer-defined `uni` values display correctly |
 | Camera initializes | ✅ PASS | Scanner widget loads |
 | Queue system | ✅ PASS | localStorage saves scans |
 | UI updates | ✅ PASS | Pending count updates when scans added |
 | Scan list display | ✅ PASS | Recent scans show with timestamp |
+| Input validation | ✅ PASS | Invalid university and ticket IDs are rejected |
+| Safe scan rendering | ✅ PASS | QR content is rendered as text, not HTML |
 | No JS errors | ✅ PASS | Console clean (except expected CORS for local file) |
+
+Run the automated security regressions from the repository root:
+
+```bash
+node tests/code_test.js
+node --test tests/index_test.js
+```
 
 ### Screenshots
 
@@ -68,9 +77,11 @@ https://YOUR_USERNAME.github.io/edufair-lead-scanner/
 
 Once deployed, test the real scanner:
 
-1. Open on your phone: `https://YOUR_USERNAME.github.io/edufair-lead-scanner/?uni=TEST`
+1. Open on your phone with one of your custom identifiers, for example:
+   `https://YOUR_USERNAME.github.io/edufair-lead-scanner/?uni=Tbilisi%20Campus`
 2. Allow camera permissions
-3. Scan a QR code (or generate one at [qr-code-generator.com](https://www.qr-code-generator.com/) with text like "USER-123")
+3. Scan a QR code containing an 8-character uppercase alphanumeric ticket ID
+   (for example, `A1B2C3D4`)
 4. Watch for the green flash
 5. Check your Google Sheet to see if the data appears in `Raw_Scans`
 
@@ -78,13 +89,10 @@ Once deployed, test the real scanner:
 
 ### Step 3: Create University Links
 
-Generate unique scanner URLs for each university:
-
-| University | URL |
-|------------|-----|
-| Harvard | `https://yoursite.github.io/edufair-lead-scanner/?uni=HARVARD` |
-| Yale | `https://yoursite.github.io/edufair-lead-scanner/?uni=YALE` |
-| MIT | `https://yoursite.github.io/edufair-lead-scanner/?uni=MIT` |
+Choose a stable custom `uni` identifier for each university and URL-encode it in
+the query string. The scanner does not contain a fixed university list. See
+README section **2.3 Create University Links** for the accepted constraints and
+examples.
 
 **Tip**: Convert these URLs to QR codes and print them so volunteers can just scan-to-open.
 

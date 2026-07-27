@@ -54,11 +54,10 @@ function handleRequest(e, method) {
 
     // Only accept identifiers generated/configured by this project. Besides
     // rejecting malformed scans, this prevents spreadsheet formula injection.
-    if (!data || !isValidIdentifier(data.uni, /^[A-Z0-9][A-Z0-9_-]{0,49}$/) ||
-        !isValidIdentifier(data.uuid, /^[A-Z0-9]{8}$/)) {
+    if (!data || !isValidUniversityId(data.uni) || !isValidTicketId(data.uuid)) {
       return createResponse({ 
         result: 'error', 
-        message: 'Invalid data. uni must be 1-50 uppercase letters, numbers, underscores, or hyphens; uuid must be 8 uppercase letters or numbers'
+        message: 'Invalid data. uni must be a safe custom ID of 1-50 characters; uuid must be 8 uppercase letters or numbers'
       });
     }
 
@@ -85,12 +84,29 @@ function handleRequest(e, method) {
   }
 }
 
-function isValidIdentifier(value, pattern) {
-  return typeof value === 'string' && pattern.test(value);
+function hasSpreadsheetFormulaPrefix(value) {
+  return typeof value === 'string' &&
+    /^'*[=+\-@\t\r\n\uFF1D\uFF0B\uFF0D\uFF20]/.test(value);
+}
+
+function isValidUniversityId(value) {
+  return typeof value === 'string' &&
+    value.length >= 1 &&
+    value.length <= 50 &&
+    value.trim() === value &&
+    !hasSpreadsheetFormulaPrefix(value) &&
+    // These controls/path characters are unsafe in exported report filenames.
+    !/[\u0000-\u001F\u007F<>:"\\|?*]/.test(value);
+}
+
+function isValidTicketId(value) {
+  return typeof value === 'string' && /^[A-Z0-9]{8}$/.test(value);
 }
 
 function neutralizeFormula(value) {
-  return /^[=+\-@]/.test(value) ? "'" + value : value;
+  // Defense in depth for spreadsheet and exported-CSV consumers. Identifier
+  // validation above rejects these prefixes before this write path is reached.
+  return hasSpreadsheetFormulaPrefix(value) ? "'" + value : value;
 }
 
 /**

@@ -237,6 +237,10 @@
         // CONFIGURATION - Paste your Google Apps Script URL here
         // =====================================================
         const API_URL = "https://script.google.com/macros/s/AKfycbyTzTjpUhAXTr5qevH8nnvwdzqLevxMWz8RxBt0ZXTVAsm3iy4J78JodPvm8-dE7yM7yA/exec";
+        // Keep these constraints in sync with Code.gs. The server remains the
+        // security boundary; client validation avoids unsafe/stuck queue items.
+        const MAX_UNIVERSITY_ID_LENGTH = 50;
+        const TICKET_ID_PATTERN = /^[A-Z0-9]{8}$/;
         // =====================================================
 
         // --- STATE ---
@@ -250,17 +254,17 @@
         const urlParams = new URLSearchParams(window.location.search);
         const UNI_ID = urlParams.get('uni');
 
-        if (!UNI_ID) {
+        if (!isValidUniversityId(UNI_ID)) {
             document.body.innerHTML = `
         <div style="padding: 40px; text-align: center;">
             <h1 style="color: #ef4444;">Configuration Error</h1>
             <p style="color: #94a3b8; margin-top: 16px;">
-                Missing <code>?uni=NAME</code> in URL.<br><br>
-                Example: <code>yoursite.com/scan?uni=HARVARD</code>
+                Missing or invalid <code>?uni=NAME</code> in URL.<br><br>
+                Example: <code>yoursite.com/scan?uni=YOUR_CUSTOM_ID</code>
             </p>
         </div>
     `;
-            throw new Error("Missing uni parameter");
+            throw new Error("Invalid uni parameter");
         }
 
         document.getElementById('uni-name').textContent = UNI_ID;
@@ -283,6 +287,24 @@
         // --- QUEUE MANAGEMENT ---
         function saveQueue() {
             localStorage.setItem(STORAGE_KEY, JSON.stringify(scanQueue));
+        }
+
+        function hasSpreadsheetFormulaPrefix(value) {
+            return typeof value === 'string' &&
+                /^'*[=+\-@\t\r\n\uFF1D\uFF0B\uFF0D\uFF20]/.test(value);
+        }
+
+        function isValidUniversityId(value) {
+            return typeof value === 'string' &&
+                value.length >= 1 &&
+                value.length <= MAX_UNIVERSITY_ID_LENGTH &&
+                value.trim() === value &&
+                !hasSpreadsheetFormulaPrefix(value) &&
+                !/[\u0000-\u001F\u007F<>:"\\|?*]/.test(value);
+        }
+
+        function isValidTicketId(value) {
+            return typeof value === 'string' && TICKET_ID_PATTERN.test(value);
         }
 
         function generateScanId() {
@@ -409,13 +431,25 @@
             const li = document.createElement('li');
             li.className = 'scan-item';
             li.id = `scan-${scanData.id}`;
-            li.innerHTML = `
-        <span class="scan-icon ${scanData.status}"></span>
-        <div class="scan-info">
-            <div class="scan-uuid">${scanData.uuid}</div>
-            <div class="scan-time">${new Date(scanData.timestamp).toLocaleTimeString()}</div>
-        </div>
-    `;
+
+            const icon = document.createElement('span');
+            icon.className = `scan-icon ${scanData.status === 'synced' ? 'synced' : 'pending'}`;
+
+            const info = document.createElement('div');
+            info.className = 'scan-info';
+
+            const uuid = document.createElement('div');
+            uuid.className = 'scan-uuid';
+            uuid.textContent = scanData.uuid;
+
+            const time = document.createElement('div');
+            time.className = 'scan-time';
+            time.textContent = new Date(scanData.timestamp).toLocaleTimeString();
+
+            info.appendChild(uuid);
+            info.appendChild(time);
+            li.appendChild(icon);
+            li.appendChild(info);
             list.prepend(li);
         }
 
@@ -435,6 +469,11 @@
 
         // --- SCANNER ---
         function onScanSuccess(decodedText) {
+            if (!isValidTicketId(decodedText)) {
+                console.warn('Invalid ticket identifier ignored');
+                return;
+            }
+
             // Add to queue
             const scanData = addToQueue(decodedText);
 
