@@ -1,117 +1,131 @@
-# Testing Plan for EduFair Live Scanner
+# EduFair Scanner Verification
 
-## ✅ Automated Tests Completed
+The automated suites validate local behavior. A real Apps Script deployment and
+phone test are still required before the security branch is ready to merge.
 
-I've already tested the app in-browser. Here are the results:
+## Automated Verification
 
-### Test Results
+Run from the repository root:
 
-| Test | Status | Details |
-|------|--------|---------|
-| UI loads correctly | ✅ PASS | All elements render properly |
-| URL parameter works | ✅ PASS | Organizer-defined `uni` values display correctly |
-| Camera initializes | ✅ PASS | Scanner widget loads |
-| Queue system | ✅ PASS | localStorage saves scans |
-| UI updates | ✅ PASS | Pending count updates when scans added |
-| Scan list display | ✅ PASS | Recent scans show with timestamp |
-| Input validation | ✅ PASS | Invalid university and ticket IDs are rejected |
-| Safe scan rendering | ✅ PASS | QR content is rendered as text, not HTML |
-| No JS errors | ✅ PASS | Console clean (except expected CORS for local file) |
-
-Run the automated security regressions from the repository root:
-
-```bash
+```powershell
 node tests/code_test.js
+node tests/participant_links_test.js
 node --test tests/index_test.js
+python -m py_compile scripts/process_leads.py
+git diff --check
 ```
 
-### Screenshots
+Expected results:
 
-![Initial Scanner State](file:///C:/Users/user/.gemini/antigravity/brain/466c1198-1be0-4f52-9050-64e56f9bccf4/initial_scanner_state_1768313266727.png)
+- `Code.gs authorization tests passed`
+- `Participant link generation tests passed`
+- fourteen passing frontend subtests
+- Python compilation exits with code 0
+- `git diff --check` produces no errors
 
-*Clean UI on load showing "HARVARD" and empty scan list*
+The suites cover token and UUID validation, inactive links, participant-ID
+substitution, duplicate idempotency, formula injection, safe DOM rendering,
+POST-body synchronization, offline persistence, rejected scans, and transient
+retry behavior.
 
-![Scan Working](file:///C:/Users/user/.gemini/antigravity/brain/466c1198-1be0-4f52-9050-64e56f9bccf4/final_scan_list_working_1768313355699.png)
+## Apps Script Pre-deployment Check
 
-*Simulated scan showing in the list with pending upload status*
+1. Confirm the Apps Script project is opened from `fair-scan-file`, not the
+   registration workbook.
+2. Confirm it contains the current `Code.gs` and `ParticipantLinks.gs`.
+3. Run `setup` and verify these exact tabs and header rows:
+   - `Raw_Scans`: `Timestamp`, `Uni_ID`, `UUID`
+   - `participant_url`: `Participant_Name`, `Participant_ID`, `Token_Hash`,
+     `Active`, `Scanner_URL`
+   - `valid_tickets`: `UUID`
+4. Add a temporary participant name and ID, run `generateParticipantUrls`, and
+   verify that a 64-character hash and complete URL appear.
+5. Run `generateParticipantUrls` again and verify the existing URL is unchanged.
+6. Select that row, run `rotateSelectedParticipantUrl`, and verify the URL and
+   hash both change while the name and ID stay unchanged.
 
----
+## New Web App Deployment
 
-## 🚀 What YOU Need to Do
+1. Select **Deploy -> New deployment -> Web app**.
+2. Use **Execute as: Me** and **Access: Anyone**.
+3. Deploy and copy the new `/exec` URL.
+4. Replace `const API_URL = UNCONFIGURED_API_URL;` in `index.html` with that URL.
+5. Rerun all automated verification commands.
+6. Commit and push the URL change to the same security branch.
 
-### Step 1: Deploy to GitHub Pages
+Opening the `/exec` URL directly sends GET and should return:
 
-Since the app works perfectly, you now need to host it on a real web server (not `file://`) so it can communicate with your Google Apps Script.
-
-#### Commands to run:
-
-```bash
-cd c:\Users\user\Documents\LEAF\edufair-lead-scanner
-
-# Stage all files
-git add -A
-
-# Commit
-git commit -m "Complete EduFair Live Scanner v1"
-
-# Push to GitHub
-git push origin main
+```json
+{"result":"error","code":"method_not_allowed"}
 ```
 
-#### Enable GitHub Pages:
+It must not create a row in `Raw_Scans`.
 
-1. Go to your GitHub repo
-2. Click **Settings** → **Pages**
-3. Set Source to: `main` branch, `/ (root)` folder
-4. Click **Save**
-5. Wait 1-2 minutes for deployment
+## Live Phone Matrix
 
-Your app will be live at:
+Use a generated participant URL and a test UUID already present in
+`valid_tickets`.
+
+| Scenario | Expected result |
+| --- | --- |
+| Valid participant link + valid UUID | One row appears in `Raw_Scans`; client turns green |
+| Scan the same UUID again | No second row; client treats duplicate as synchronized |
+| Eight-character UUID absent from `valid_tickets` | No row; client turns red/rejected |
+| Change `?uni=` while keeping the token | No row; request is unauthorized/rejected |
+| Set participant `Active` to `FALSE` | Existing URL is rejected |
+| Rotate the selected participant URL | Old URL is rejected; new URL succeeds |
+| Disable network and scan a valid UUID | Yellow pending item remains locally |
+| Restore network | Pending item syncs once and turns green |
+| Temporary server/network failure | Item remains pending and retries later |
+
+## Browser Network Inspection
+
+For one valid synchronization, inspect the browser's Network panel:
+
+- Method is `POST`.
+- Request URL is exactly the configured Apps Script `/exec` URL.
+- The participant token is absent from the request URL.
+- The URL-encoded request body contains `participant_id`, `token`, `uuid`, and
+  `timestamp`.
+- The response is `{ "result": "success", ... }`.
+- The browser console does not contain the token.
+
+## Sheet and Privacy Check
+
+After the live matrix:
+
+- `Raw_Scans` contains only timestamp, participant ID, and UUID.
+- `valid_tickets` contains UUIDs only.
+- `participant_url` contains no registration PII.
+- The Apps Script code contains no registration workbook ID and no
+  `SpreadsheetApp.openById`/`openByUrl` call.
+- The old Apps Script deployment is removed from the registration workbook after
+  the new deployment succeeds.
+
+## Post-event Smoke Test
+
+Export:
+
+- `registrations.csv` from the private registration workbook; and
+- `raw_scans.csv` from `fair-scan-file` -> `Raw_Scans`.
+
+Run:
+
+```powershell
+python scripts/process_leads.py registrations.csv raw_scans.csv
 ```
-https://YOUR_USERNAME.github.io/edufair-lead-scanner/
-```
 
----
+Verify that each `reports/leads_<Uni_ID>.csv` contains only registrations whose
+UUID was scanned for that participant. The reporting script does not receive
+participant tokens or the `valid_tickets` export.
 
-### Step 2: Test Live on GitHub Pages
+## Troubleshooting
 
-Once deployed, test the real scanner:
-
-1. Open on your phone with one of your custom identifiers, for example:
-   `https://YOUR_USERNAME.github.io/edufair-lead-scanner/?uni=Tbilisi%20Campus`
-2. Allow camera permissions
-3. Scan a QR code containing an 8-character uppercase alphanumeric ticket ID
-   (for example, `A1B2C3D4`)
-4. Watch for the green flash
-5. Check your Google Sheet to see if the data appears in `Raw_Scans`
-
----
-
-### Step 3: Create University Links
-
-Choose a stable custom `uni` identifier for each university and URL-encode it in
-the query string. The scanner does not contain a fixed university list. See
-README section **2.3 Create University Links** for the accepted constraints and
-examples.
-
-**Tip**: Convert these URLs to QR codes and print them so volunteers can just scan-to-open.
-
----
-
-## Expected Behavior
-
-✅ **Scan works** → Green flash + entry in "Recent Scans"  
-✅ **Offline** → Yellow "pending" indicator  
-✅ **Back online** → Auto-syncs, icon turns green  
-✅ **Google Sheet** → New rows appear in `Raw_Scans` tab
-
----
-
-## If Something Fails
-
-| Problem | Solution |
-|---------|----------|
-| "Configuration Error" | Add `?uni=NAME` to URL |
-| Camera blocked | Allow camera in browser settings |
-| "Sync failed" | Check Google Script URL in line 239 of index.html |
-| No data in sheet | Redeploy Code.gs as Web App with "Anyone" access |
+| Symptom | Check |
+| --- | --- |
+| Configuration Error before camera starts | Confirm the new `/exec` URL replaced the API sentinel and use a generated participant URL |
+| Every scan is rejected as unauthorized | Confirm `Token_Hash`, `Active`, and `Scanner_URL` are from the same participant row |
+| Valid QR is rejected | Confirm n8n wrote the exact uppercase eight-character UUID to `valid_tickets` |
+| Item stays pending | Check connectivity, Apps Script executions, deployment access, and POST response |
+| `server_error` response | Verify all three exact tab names and header rows |
+| Old link still works after rotation | Confirm the latest Apps Script version is deployed and the old hash was replaced |
