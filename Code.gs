@@ -52,12 +52,13 @@ function handleRequest(e, method) {
       };
     }
 
-    // Validate
-    if (!data || !data.uni || !data.uuid) {
+    // Only accept identifiers generated/configured by this project. Besides
+    // rejecting malformed scans, this prevents spreadsheet formula injection.
+    if (!data || !isValidIdentifier(data.uni, /^[A-Z0-9][A-Z0-9_-]{0,49}$/) ||
+        !isValidIdentifier(data.uuid, /^[A-Z0-9]{8}$/)) {
       return createResponse({ 
         result: 'error', 
-        message: 'Missing data. Required: uni, uuid',
-        received: e.parameter || 'none'
+        message: 'Invalid data. uni must be 1-50 uppercase letters, numbers, underscores, or hyphens; uuid must be 8 uppercase letters or numbers'
       });
     }
 
@@ -73,7 +74,7 @@ function handleRequest(e, method) {
 
     // Append data
     const timestamp = data.timestamp ? new Date(data.timestamp) : new Date();
-    sheet.appendRow([timestamp, data.uni, data.uuid]);
+    sheet.appendRow([timestamp, neutralizeFormula(data.uni), neutralizeFormula(data.uuid)]);
 
     return createResponse({ result: 'success', row: sheet.getLastRow() });
 
@@ -82,6 +83,14 @@ function handleRequest(e, method) {
   } finally {
     lock.releaseLock();
   }
+}
+
+function isValidIdentifier(value, pattern) {
+  return typeof value === 'string' && pattern.test(value);
+}
+
+function neutralizeFormula(value) {
+  return /^[=+\-@]/.test(value) ? "'" + value : value;
 }
 
 /**

@@ -80,8 +80,9 @@ See `email-templates/confirmation-email.html` for a full template.
 
 #### 2.1 Deploy Google Apps Script
 
-1. Open your Google Sheet
-2. **Extensions → Apps Script**
+1. Create a **new, dedicated Google Sheet** for scan data. Do not use the
+   Registration Sheet or any workbook containing registration PII.
+2. From the dedicated Scan Sheet, open **Extensions → Apps Script**
 3. Paste contents of `Code.gs`
 4. **Deploy → New deployment → Web App**
    - Execute as: Me
@@ -110,7 +111,7 @@ See `email-templates/confirmation-email.html` for a full template.
 #### 3.1 Export Data
 
 1. From your Registration Sheet → Download as `registrations.csv`
-2. From `Raw_Scans` tab → Download as `raw_scans.csv`
+2. From the dedicated Scan Sheet's `Raw_Scans` tab → Download as `raw_scans.csv`
 
 #### 3.2 Run the Script
 
