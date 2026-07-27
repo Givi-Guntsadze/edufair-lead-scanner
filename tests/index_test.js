@@ -6,6 +6,7 @@ const vm = require('node:vm');
 const STORAGE_KEY = 'edufair_scan_queue';
 const VALID_TOKEN = 'a'.repeat(64);
 const TEST_API_URL = 'https://script.google.com/macros/s/test-deployment/exec';
+const DEPLOYED_API_URL = 'https://script.google.com/macros/s/AKfycby6LOkfukNUs45lPizNuFrGCzAzQEo0WNCRHgajRSGvhCTF0j1JrTDpsyygHW89Bwzw/exec';
 
 function createElement(tagName, innerHTMLWrites) {
   const element = {
@@ -175,11 +176,10 @@ function createHarness({
   };
 }
 
-test('fails closed when the Apps Script URL is unconfigured', () => {
-  assert.match(
-    fs.readFileSync('index.html', 'utf8'),
-    /const API_URL = UNCONFIGURED_API_URL;/
-  );
+test('uses the deployed fair-scan-file Apps Script URL', () => {
+  const html = fs.readFileSync('index.html', 'utf8');
+  assert.ok(html.includes(`const API_URL = '${DEPLOYED_API_URL}';`));
+  assert.doesNotMatch(html, /const API_URL = UNCONFIGURED_API_URL;/);
   assert.throws(
     () => createHarness({ apiUrl: null }),
     /Invalid participant link or scanner deployment configuration/
