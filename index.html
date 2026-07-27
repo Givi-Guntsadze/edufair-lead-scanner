@@ -102,6 +102,11 @@
             font-weight: 600;
         }
 
+        .pending-count.has-rejected {
+            color: var(--danger);
+            font-weight: 600;
+        }
+
         .sync-btn {
             background: var(--primary);
             color: white;
@@ -149,6 +154,10 @@
 
         .scan-icon.synced {
             background: var(--success);
+        }
+
+        .scan-icon.rejected {
+            background: var(--danger);
         }
 
         .scan-info {
@@ -234,36 +243,56 @@
 
     <script>
         // =====================================================
-        // CONFIGURATION - Paste your Google Apps Script URL here
+        // CONFIGURATION - fair-scan-file Apps Script web app
         // =====================================================
-        const API_URL = "https://script.google.com/macros/s/AKfycbyTzTjpUhAXTr5qevH8nnvwdzqLevxMWz8RxBt0ZXTVAsm3iy4J78JodPvm8-dE7yM7yA/exec";
+        const UNCONFIGURED_API_URL = 'UNCONFIGURED_FAIR_SCAN_WEB_APP_URL';
+        const API_URL = 'https://script.google.com/macros/s/AKfycby6LOkfukNUs45lPizNuFrGCzAzQEo0WNCRHgajRSGvhCTF0j1JrTDpsyygHW89Bwzw/exec';
+        // Keep these constraints in sync with Code.gs. The server remains the
+        // security boundary; client validation avoids unsafe/stuck queue items.
+        const MAX_UNIVERSITY_ID_LENGTH = 50;
+        const TICKET_ID_PATTERN = /^[A-Z0-9]{8}$/;
+        const TOKEN_PATTERN = /^[a-f0-9]{64}$/;
+        const ISO_TIMESTAMP_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
+        const TERMINAL_STATUSES = new Set(['synced', 'rejected']);
+        const PERMANENT_ERROR_CODES = new Set([
+            'unauthorized',
+            'invalid_request',
+            'invalid_ticket'
+        ]);
         // =====================================================
 
         // --- STATE ---
         const STORAGE_KEY = 'edufair_scan_queue';
-        let scanQueue = JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]');
+        let scanQueue = loadQueue();
         let isOnline = navigator.onLine;
         let isSyncing = false;
         let html5QrCode = null;
 
-        // --- Get University ID from URL ---
+        // --- Get participant identity and bearer credential from URL ---
         const urlParams = new URLSearchParams(window.location.search);
+        const fragmentParams = new URLSearchParams(window.location.hash.slice(1));
         const UNI_ID = urlParams.get('uni');
+        const PARTICIPANT_TOKEN = fragmentParams.get('token');
 
-        if (!UNI_ID) {
-            document.body.innerHTML = `
-        <div style="padding: 40px; text-align: center;">
-            <h1 style="color: #ef4444;">Configuration Error</h1>
-            <p style="color: #94a3b8; margin-top: 16px;">
-                Missing <code>?uni=NAME</code> in URL.<br><br>
-                Example: <code>yoursite.com/scan?uni=HARVARD</code>
-            </p>
-        </div>
-    `;
-            throw new Error("Missing uni parameter");
+        if (!isValidUniversityId(UNI_ID) ||
+            !TOKEN_PATTERN.test(PARTICIPANT_TOKEN || '') ||
+            !isConfiguredApiUrl(API_URL)) {
+            renderConfigurationError();
+            throw new Error('Invalid participant link or scanner deployment configuration');
         }
 
         document.getElementById('uni-name').textContent = UNI_ID;
+
+        function renderConfigurationError() {
+            document.body.innerHTML = `
+                <div style="padding: 40px; text-align: center;">
+                    <h1 style="color: #ef4444;">Configuration Error</h1>
+                    <p style="color: #94a3b8; margin-top: 16px;">
+                        This participant scanner link is missing, invalid, or not deployed yet.
+                    </p>
+                </div>
+            `;
+        }
 
         // --- NETWORK STATUS ---
         function updateNetworkStatus() {
@@ -281,8 +310,84 @@
         window.addEventListener('offline', () => { isOnline = false; updateNetworkStatus(); });
 
         // --- QUEUE MANAGEMENT ---
+        function loadQueue() {
+            try {
+                const stored = JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]');
+                if (!Array.isArray(stored)) return [];
+                return stored.map(normalizeStoredScan).filter(Boolean);
+            } catch (error) {
+                console.warn('Stored scan queue was reset because it was invalid');
+                return [];
+            }
+        }
+
+        function normalizeStoredScan(scan) {
+            if (!scan || typeof scan !== 'object') return null;
+
+            const participantId = isValidUniversityId(scan.participantId)
+                ? scan.participantId
+                : (isValidUniversityId(scan.uni) ? scan.uni : '');
+            const token = TOKEN_PATTERN.test(scan.token || '') ? scan.token : '';
+            const uuid = typeof scan.uuid === 'string' ? scan.uuid : '';
+            const timestamp = isValidTimestamp(scan.timestamp)
+                ? scan.timestamp
+                : new Date(0).toISOString();
+            let status = ['pending', 'synced', 'rejected'].includes(scan.status)
+                ? scan.status
+                : 'rejected';
+
+            if (status === 'pending' &&
+                (!participantId || !token || !isValidTicketId(uuid) || !isValidTimestamp(scan.timestamp))) {
+                status = 'rejected';
+            }
+
+            return {
+                id: isValidScanId(scan.id) ? scan.id : generateScanId(),
+                participantId,
+                token: status === 'pending' ? token : '',
+                uuid,
+                timestamp,
+                status
+            };
+        }
+
         function saveQueue() {
             localStorage.setItem(STORAGE_KEY, JSON.stringify(scanQueue));
+        }
+
+        function hasSpreadsheetFormulaPrefix(value) {
+            return typeof value === 'string' &&
+                /^'*[=+\-@\t\r\n\uFF1D\uFF0B\uFF0D\uFF20]/.test(value);
+        }
+
+        function isValidUniversityId(value) {
+            return typeof value === 'string' &&
+                value.length >= 1 &&
+                value.length <= MAX_UNIVERSITY_ID_LENGTH &&
+                value.trim() === value &&
+                !hasSpreadsheetFormulaPrefix(value) &&
+                !/[\u0000-\u001F\u007F<>:"\\|?*]/.test(value);
+        }
+
+        function isValidTicketId(value) {
+            return typeof value === 'string' && TICKET_ID_PATTERN.test(value);
+        }
+
+        function isValidTimestamp(value) {
+            if (typeof value !== 'string' || !ISO_TIMESTAMP_PATTERN.test(value)) {
+                return false;
+            }
+            const parsed = new Date(value);
+            return !Number.isNaN(parsed.getTime()) && parsed.toISOString() === value;
+        }
+
+        function isValidScanId(value) {
+            return typeof value === 'string' && /^[A-Za-z0-9-]{1,100}$/.test(value);
+        }
+
+        function isConfiguredApiUrl(value) {
+            return value !== UNCONFIGURED_API_URL &&
+                /^https:\/\/script\.google\.com\/macros\/s\/[A-Za-z0-9_-]+\/exec$/.test(value);
         }
 
         function generateScanId() {
@@ -294,18 +399,22 @@
         }
 
         function addToQueue(uuid) {
-            // Prevent duplicate UUIDs (same person scanned twice in quick succession)
-            if (scanQueue.some(s => s.uuid === uuid)) {
-                console.log('Duplicate scan ignored:', uuid);
+            // Avoid local duplicates for the same participant. Server-side
+            // idempotency remains authoritative across devices and retries.
+            if (scanQueue.some(scan =>
+                scan.participantId === UNI_ID && scan.uuid === uuid
+            )) {
+                console.log('Duplicate scan ignored');
                 return null;
             }
 
             const scanData = {
                 id: generateScanId(),
-                uni: UNI_ID,
+                participantId: UNI_ID,
+                token: PARTICIPANT_TOKEN,
                 uuid: uuid,
                 timestamp: new Date().toISOString(),
-                status: 'pending' // pending | synced
+                status: 'pending'
             };
 
             scanQueue.push(scanData);
@@ -313,16 +422,25 @@
             return scanData;
         }
 
-        function markSynced(id) {
+        function markScanStatus(id, status) {
             const scan = scanQueue.find(s => s.id === id);
             if (scan) {
-                scan.status = 'synced';
+                scan.status = status;
+                if (TERMINAL_STATUSES.has(status)) {
+                    // A completed queue item no longer needs to retain a bearer
+                    // credential in local storage.
+                    scan.token = '';
+                }
                 saveQueue();
             }
         }
 
         function getPendingCount() {
             return scanQueue.filter(s => s.status === 'pending').length;
+        }
+
+        function getRejectedCount() {
+            return scanQueue.filter(s => s.status === 'rejected').length;
         }
 
         // --- SYNC LOGIC ---
@@ -335,39 +453,58 @@
             isSyncing = true;
             updateUI();
 
-            for (const scan of pending) {
-                try {
-                    // Use GET with URL parameters - more reliable with Google Apps Script
-                    const params = new URLSearchParams({
-                        uni: scan.uni,
-                        uuid: scan.uuid,
-                        timestamp: scan.timestamp
-                    });
+            try {
+                for (const scan of pending) {
+                    try {
+                        const body = new URLSearchParams({
+                            participant_id: scan.participantId,
+                            token: scan.token,
+                            uuid: scan.uuid,
+                            timestamp: scan.timestamp
+                        });
 
-                    const response = await fetch(`${API_URL}?${params.toString()}`, {
-                        method: 'GET',
-                        redirect: 'follow'
-                    });
+                        const response = await fetch(API_URL, {
+                            method: 'POST',
+                            headers: {
+                                'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8'
+                            },
+                            body: body.toString(),
+                            credentials: 'omit',
+                            redirect: 'follow',
+                            referrerPolicy: 'no-referrer'
+                        });
 
-                    // Check if we got a valid response
-                    if (response.ok) {
-                        const result = await response.json();
-                        if (result.result === 'success') {
-                            markSynced(scan.id);
-                            updateScanItemUI(scan.id, 'synced');
-                        } else {
-                            console.error('Sync error:', result.message);
+                        if (!response.ok) {
+                            break;
                         }
-                    }
-                } catch (error) {
-                    console.error('Sync failed for', scan.uuid, error);
-                    // Stop trying on network error
-                    break;
-                }
-            }
 
-            isSyncing = false;
-            updateUI();
+                        const result = await response.json();
+                        if (result && result.result === 'success') {
+                            markScanStatus(scan.id, 'synced');
+                            updateScanItemUI(scan.id, 'synced');
+                            continue;
+                        }
+
+                        if (result && PERMANENT_ERROR_CODES.has(result.code)) {
+                            markScanStatus(scan.id, 'rejected');
+                            updateScanItemUI(scan.id, 'rejected');
+                            continue;
+                        }
+
+                        // Busy, malformed, and internal-error responses are
+                        // transient. Leave this and later scans pending.
+                        break;
+                    } catch (error) {
+                        // Do not log the Error object: network libraries can
+                        // include the credential-bearing request body in it.
+                        console.error('Scan synchronization failed');
+                        break;
+                    }
+                }
+            } finally {
+                isSyncing = false;
+                updateUI();
+            }
         }
 
         // Auto-retry sync every 5 seconds
@@ -382,15 +519,21 @@
 
         // --- UI UPDATES ---
         function updateUI() {
-            const count = getPendingCount();
+            const pendingCount = getPendingCount();
+            const rejectedCount = getRejectedCount();
             const countEl = document.getElementById('pending-count');
             const btnEl = document.getElementById('sync-btn');
 
-            if (count > 0) {
-                countEl.textContent = `${count} pending upload${count > 1 ? 's' : ''}`;
+            if (pendingCount > 0) {
+                countEl.textContent = `${pendingCount} pending upload${pendingCount > 1 ? 's' : ''}`;
                 countEl.className = 'pending-count has-pending';
                 btnEl.disabled = isSyncing;
                 btnEl.textContent = isSyncing ? 'Syncing...' : 'Sync Now';
+            } else if (rejectedCount > 0) {
+                countEl.textContent = `${rejectedCount} rejected scan${rejectedCount > 1 ? 's' : ''}`;
+                countEl.className = 'pending-count has-rejected';
+                btnEl.disabled = true;
+                btnEl.textContent = 'Sync Now';
             } else {
                 countEl.textContent = 'All synced';
                 countEl.className = 'pending-count';
@@ -409,13 +552,28 @@
             const li = document.createElement('li');
             li.className = 'scan-item';
             li.id = `scan-${scanData.id}`;
-            li.innerHTML = `
-        <span class="scan-icon ${scanData.status}"></span>
-        <div class="scan-info">
-            <div class="scan-uuid">${scanData.uuid}</div>
-            <div class="scan-time">${new Date(scanData.timestamp).toLocaleTimeString()}</div>
-        </div>
-    `;
+
+            const icon = document.createElement('span');
+            const displayStatus = ['synced', 'rejected'].includes(scanData.status)
+                ? scanData.status
+                : 'pending';
+            icon.className = `scan-icon ${displayStatus}`;
+
+            const info = document.createElement('div');
+            info.className = 'scan-info';
+
+            const uuid = document.createElement('div');
+            uuid.className = 'scan-uuid';
+            uuid.textContent = scanData.uuid;
+
+            const time = document.createElement('div');
+            time.className = 'scan-time';
+            time.textContent = new Date(scanData.timestamp).toLocaleTimeString();
+
+            info.appendChild(uuid);
+            info.appendChild(time);
+            li.appendChild(icon);
+            li.appendChild(info);
             list.prepend(li);
         }
 
@@ -423,7 +581,9 @@
             const item = document.getElementById(`scan-${id}`);
             if (item) {
                 const icon = item.querySelector('.scan-icon');
-                icon.className = `scan-icon ${status}`;
+                if (icon) {
+                    icon.className = `scan-icon ${status}`;
+                }
             }
         }
 
@@ -435,6 +595,11 @@
 
         // --- SCANNER ---
         function onScanSuccess(decodedText) {
+            if (!isValidTicketId(decodedText)) {
+                console.warn('Invalid ticket identifier ignored');
+                return;
+            }
+
             // Add to queue
             const scanData = addToQueue(decodedText);
 
@@ -455,6 +620,7 @@
 
         // --- INIT ---
         function init() {
+            saveQueue();
             updateNetworkStatus();
             updateUI();
 
