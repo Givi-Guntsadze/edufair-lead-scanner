@@ -20,7 +20,7 @@
         <!-- Body -->
         <div style="padding: 40px 30px;">
             <p style="font-size: 16px; color: #334155; line-height: 1.6;">
-                გამარჯობა <strong>{{$json.Name}}</strong>,
+                გამარჯობა <strong>{{ ($json.Name ?? '').toString().replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;').replaceAll("'", '&#39;') }}</strong>,
             </p>
 
             <p style="font-size: 16px; color: #334155; line-height: 1.6;">
@@ -89,8 +89,9 @@ USAGE INSTRUCTIONS
 
 1. COPY THE HTML ABOVE into your email automation tool (n8n, CF7 Mail, etc.)
 
-2. REPLACE THESE PLACEHOLDERS with your tool's dynamic tags:
-   - [your-name]  → The registrant's name field
+2. CONFIGURE THE DYNAMIC VALUES for your email automation tool:
+   - The registrant's name uses an n8n expression that HTML-escapes the value.
+     Keep that escaping when adapting the expression for another automation tool.
    - [ticket_id]  → The generated UUID/ticket_id
 
 3. HOW THE QR WORKS:
