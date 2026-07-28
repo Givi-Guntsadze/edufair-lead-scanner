@@ -7,20 +7,30 @@ const TEMPLATE_PATH = process.env.EMAIL_TEMPLATE_PATH ||
   'email-templates/confirmation-email.html';
 const template = fs.readFileSync(TEMPLATE_PATH, 'utf8');
 const expressionMatch = template.match(
-  /<strong>\{\{([\s\S]*?\$json\.Name[\s\S]*?)\}\}<\/strong>/
+  /<strong>\{\{([\s\S]*?Name[\s\S]*?)\}\}<\/strong>/
 );
 
 assert.ok(expressionMatch, 'registrant-name n8n expression is missing');
 const nameExpression = expressionMatch[1].trim();
 
 function renderName(name, includeName = true) {
-  const json = {};
-  if (includeName) json.Name = name;
-  return vm.runInNewContext(nameExpression, { $json: json });
+  const registration = {};
+  if (includeName) registration.Name = name;
+  const items = (nodeName) => {
+    assert.equal(nodeName, 'Append to Regs');
+    return [{ json: registration }];
+  };
+  return vm.runInNewContext(nameExpression, {
+    $json: { UUID: '5259B25Z' },
+    $items: items
+  });
 }
 
-test('preserves the existing n8n Name field and Unicode names', () => {
-  assert.match(nameExpression, /\$json\.Name/);
+test('reads Name from Append to Regs and preserves Unicode names', () => {
+  assert.match(
+    nameExpression,
+    /\$items\(["']Append to Regs["']\)\[0\]\.json\.Name/
+  );
   assert.equal(renderName('ნინო გელაშვილი'), 'ნინო გელაშვილი');
 });
 
