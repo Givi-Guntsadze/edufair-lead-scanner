@@ -38,6 +38,7 @@ edufair-lead-scanner/
 |-- tests/code_test.js             Receiver security regressions
 |-- tests/participant_links_test.js
 |-- tests/index_test.js            Browser/offline queue regressions
+|-- vendor/html5-qrcode.min.js     Pinned same-origin QR decoder
 |-- email-templates/confirmation-email.html
 `-- wordpress/ticket-id-generator.php
 ```
@@ -178,6 +179,11 @@ The production scanner is hosted at:
 ```text
 https://givi-guntsadze.github.io/edufair-lead-scanner/
 ```
+
+The QR decoder is the vendored `html5-qrcode` 2.3.8 release. It is served from
+the scanner origin so a remote CDN cannot execute in the credential-bearing
+page. Its provenance, checksum, and license are recorded in
+`THIRD_PARTY_NOTICES.md`.
 
 Validated changes are developed on the security branch and must not be merged
 to `main` until the automated tests, new Apps Script deployment, and manual phone

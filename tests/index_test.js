@@ -1,4 +1,5 @@
 const assert = require('node:assert/strict');
+const crypto = require('node:crypto');
 const fs = require('node:fs');
 const test = require('node:test');
 const vm = require('node:vm');
@@ -186,11 +187,22 @@ test('uses the deployed fair-scan-file Apps Script URL', () => {
   );
 });
 
-test('loads QR scanning code only from the application origin', () => {
+test('loads a verified same-origin cross-browser QR decoder', () => {
   const html = fs.readFileSync('index.html', 'utf8');
-  assert.match(html, /<script src="scanner\.js"><\/script>/);
+  const scannerPath = 'vendor/html5-qrcode.min.js';
+
+  assert.match(html, /<script src="vendor\/html5-qrcode\.min\.js"><\/script>/);
   assert.doesNotMatch(html, /<script[^>]+src=["']https?:\/\//i);
-  assert.ok(fs.statSync('scanner.js').size > 0);
+  assert.equal(fs.existsSync(scannerPath), true, 'vendored QR decoder is missing');
+
+  const digest = crypto
+    .createHash('sha256')
+    .update(fs.readFileSync(scannerPath))
+    .digest('hex');
+  assert.equal(
+    digest,
+    '660b12437b1d747e3e68b8be0685c08cb728140110ad213f167b14b66f8b1d8e'
+  );
 });
 
 test('does not start without a participant token', () => {
