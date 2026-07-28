@@ -11,6 +11,7 @@ Run from the repository root:
 node tests/code_test.js
 node tests/participant_links_test.js
 node --test tests/index_test.js
+node --test tests/email_template_test.js
 python -m py_compile scripts/process_leads.py
 git diff --check
 ```
@@ -20,6 +21,7 @@ Expected results:
 - `Code.gs authorization tests passed`
 - `Participant link generation tests passed`
 - fifteen passing frontend subtests
+- four passing confirmation-email escaping subtests
 - Python compilation exits with code 0
 - `git diff --check` produces no errors
 

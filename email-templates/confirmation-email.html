@@ -20,7 +20,7 @@
         <!-- Body -->
         <div style="padding: 40px 30px;">
             <p style="font-size: 16px; color: #334155; line-height: 1.6;">
-                გამარჯობა <strong>{{$json.Name}}</strong>,
+                გამარჯობა <strong>{{ (typeof $items("Append to Regs")[0].json.Name === 'object' && $items("Append to Regs")[0].json.Name !== null ? JSON.stringify($items("Append to Regs")[0].json.Name) : String($items("Append to Regs")[0].json.Name ?? '')).replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;').replaceAll("'", '&#39;') }}</strong>,
             </p>
 
             <p style="font-size: 16px; color: #334155; line-height: 1.6;">
@@ -89,8 +89,11 @@ USAGE INSTRUCTIONS
 
 1. COPY THE HTML ABOVE into your email automation tool (n8n, CF7 Mail, etc.)
 
-2. REPLACE THESE PLACEHOLDERS with your tool's dynamic tags:
-   - [your-name]  → The registrant's name field
+2. CONFIGURE THE DYNAMIC VALUES for your email automation tool:
+   - The registrant's name reads `Name` from the `Append to Regs` node because
+     the Email node's immediate input contains only the generated UUID.
+   - Keep the HTML escaping when adapting the expression. If the workflow node
+     or field is renamed, update that explicit reference without removing escaping.
    - [ticket_id]  → The generated UUID/ticket_id
 
 3. HOW THE QR WORKS:

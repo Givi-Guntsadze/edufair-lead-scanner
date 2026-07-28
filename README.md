@@ -38,6 +38,7 @@ edufair-lead-scanner/
 |-- tests/code_test.js             Receiver security regressions
 |-- tests/participant_links_test.js
 |-- tests/index_test.js            Browser/offline queue regressions
+|-- tests/email_template_test.js   Confirmation-email escaping regressions
 |-- vendor/html5-qrcode.min.js     Pinned same-origin QR decoder
 |-- email-templates/confirmation-email.html
 `-- wordpress/ticket-id-generator.php
@@ -233,6 +234,7 @@ Run from the repository root:
 node tests/code_test.js
 node tests/participant_links_test.js
 node --test tests/index_test.js
+node --test tests/email_template_test.js
 python -m py_compile scripts/process_leads.py
 ```
 
