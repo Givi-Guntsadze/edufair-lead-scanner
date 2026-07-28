@@ -37,6 +37,15 @@ test('renders missing and null names as empty text', () => {
   assert.equal(renderName(null), '');
 });
 
-test('coerces non-string JSON values before escaping', () => {
+test('safely serializes non-string JSON values before escaping', () => {
   assert.equal(renderName(2026), '2026');
+  assert.equal(renderName(true), 'true');
+  assert.equal(
+    renderName(['ნინო', '<b>']),
+    '[&quot;ნინო&quot;,&quot;&lt;b&gt;&quot;]'
+  );
+  assert.equal(
+    renderName({ toString: '<img src=x onerror=alert(1)>' }),
+    '{&quot;toString&quot;:&quot;&lt;img src=x onerror=alert(1)&gt;&quot;}'
+  );
 });
