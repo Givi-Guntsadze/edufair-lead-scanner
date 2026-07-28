@@ -186,6 +186,13 @@ test('uses the deployed fair-scan-file Apps Script URL', () => {
   );
 });
 
+test('loads QR scanning code only from the application origin', () => {
+  const html = fs.readFileSync('index.html', 'utf8');
+  assert.match(html, /<script src="scanner\.js"><\/script>/);
+  assert.doesNotMatch(html, /<script[^>]+src=["']https?:\/\//i);
+  assert.ok(fs.statSync('scanner.js').size > 0);
+});
+
 test('does not start without a participant token', () => {
   assert.throws(
     () => createHarness({ hash: '' }),

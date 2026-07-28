@@ -19,7 +19,7 @@ Expected results:
 
 - `Code.gs authorization tests passed`
 - `Participant link generation tests passed`
-- fourteen passing frontend subtests
+- fifteen passing frontend subtests
 - Python compilation exits with code 0
 - `git diff --check` produces no errors
 
