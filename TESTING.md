@@ -13,6 +13,7 @@ node tests/participant_links_test.js
 node --test tests/index_test.js
 node --test tests/email_template_test.js
 python -m py_compile scripts/process_leads.py
+python -X utf8 tests/process_leads_test.py
 git diff --check
 ```
 
@@ -123,6 +124,10 @@ python scripts/process_leads.py registrations.csv raw_scans.csv
 Verify that each `reports/leads_<Uni_ID>.csv` contains only registrations whose
 UUID was scanned for that participant. The reporting script does not receive
 participant tokens or the `valid_tickets` export.
+
+The participant report columns must include `Name`, `Last Name`, `Email`,
+`Phone`, `Which programs?`, `Age`, `Intake Year`, `Country`, `Additional Info`,
+and `Consent`. Registration-export header whitespace is trimmed automatically.
 
 ## Troubleshooting
 

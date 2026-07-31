@@ -209,7 +209,10 @@ used for display, while the token in the URL fragment authorizes synchronization
 
 ## 8. Post-Event Processing
 
-The existing Python processor is unchanged.
+The registration export uses these columns (surrounding header whitespace is
+trimmed automatically): `timestamp`, `Name`, `Last Name`, `Email`, `Phone`,
+`Which programs?`, `Age`, `Intake Year`, `Country`, `Additional Info`, `Consent`,
+and `UUID`.
 
 1. Export the registration workbook's `Registrations` tab as
    `registrations.csv`.
@@ -235,6 +238,7 @@ node tests/code_test.js
 node tests/participant_links_test.js
 node --test tests/index_test.js
 node --test tests/email_template_test.js
+python -X utf8 tests/process_leads_test.py
 python -m py_compile scripts/process_leads.py
 ```
 
