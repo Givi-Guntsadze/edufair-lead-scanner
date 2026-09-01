@@ -53,7 +53,7 @@ For each completed registration, the n8n workflow must perform these operations
 in order:
 
 1. Generate the UUID.
-2. Append the full registration to `Registrations`.
+2. Append the full registration, including `Which Fair`, to `Registrations`.
 3. Append that same UUID, with no PII, to `fair-scan-file` -> `valid_tickets`.
 4. Send the confirmation email and QR code only after both writes succeed.
 
