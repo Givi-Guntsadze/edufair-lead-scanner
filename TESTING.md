@@ -127,7 +127,9 @@ participant tokens or the `valid_tickets` export.
 
 The participant report columns must include `Name`, `Last Name`, `Email`,
 `Phone`, `Which programs?`, `Age`, `Intake Year`, `Country`, `Additional Info`,
-and `Consent`. Registration-export header whitespace is trimmed automatically.
+and `Consent`, with `Which Fair` between `Country` and `Additional Info`.
+Registrations from Tbilisi and Batumi scanned for the same institution must
+remain in one institution CSV so the recipient can filter by city.
 
 ## Troubleshooting
 

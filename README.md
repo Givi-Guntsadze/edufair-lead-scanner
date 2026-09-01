@@ -53,7 +53,7 @@ For each completed registration, the n8n workflow must perform these operations
 in order:
 
 1. Generate the UUID.
-2. Append the full registration to `Registrations`.
+2. Append the full registration, including `Which Fair`, to `Registrations`.
 3. Append that same UUID, with no PII, to `fair-scan-file` -> `valid_tickets`.
 4. Send the confirmation email and QR code only after both writes succeed.
 
@@ -211,8 +211,8 @@ used for display, while the token in the URL fragment authorizes synchronization
 
 The registration export uses these columns (surrounding header whitespace is
 trimmed automatically): `timestamp`, `Name`, `Last Name`, `Email`, `Phone`,
-`Which programs?`, `Age`, `Intake Year`, `Country`, `Additional Info`, `Consent`,
-and `UUID`.
+`Which programs?`, `Age`, `Intake Year`, `Country`, `Which Fair`,
+`Additional Info`, `Consent`, and `UUID`.
 
 1. Export the registration workbook's `Registrations` tab as
    `registrations.csv`.
@@ -227,7 +227,8 @@ python scripts/process_leads.py
 
 The script joins the two files by UUID and creates `reports/leads_<Uni_ID>.csv`
 for every participant with accepted scans. `participant_url` and
-`valid_tickets` are not Python inputs.
+`valid_tickets` are not Python inputs. Each institution receives one CSV with a
+`Which Fair` column that it can filter by city.
 
 ## Automated Tests
 

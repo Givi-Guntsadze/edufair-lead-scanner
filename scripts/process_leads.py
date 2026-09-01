@@ -113,7 +113,7 @@ def generate_reports(merged: pd.DataFrame, output_dir: str = 'reports'):
     priority_columns = [
         'Name', 'Last Name', 'Email', 'Phone',
         'Which programs?', 'Age', 'Intake Year', 'Country',
-        'Additional Info', 'Consent',
+        'Which Fair', 'Additional Info', 'Consent',
         'Consent (to receive communication)',
         # Fallbacks
         'name', 'email', 'phone'
