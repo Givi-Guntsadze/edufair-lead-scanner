@@ -45,25 +45,21 @@
 
         /* Status Bar */
         .status-bar {
-            display: flex;
-            justify-content: space-between;
+            display: grid;
+            grid-template-columns: 1fr auto 1fr;
             align-items: center;
+            gap: 8px;
             padding: 12px 16px;
             background: var(--surface);
             border-bottom: 1px solid var(--border);
         }
 
-        .brand-id {
-            display: flex;
-            flex-direction: column;
-            gap: 2px;
-        }
-
         .brand-name {
-            font-size: 0.68rem;
-            font-weight: 800;
-            letter-spacing: 0.04em;
+            justify-self: center;
+            font-size: 1.1rem;
+            font-weight: 700;
             color: var(--burnt);
+            white-space: nowrap;
         }
 
         .brand-name .qr-accent {
@@ -71,11 +67,13 @@
         }
 
         .uni-name {
+            justify-self: start;
             font-weight: 700;
             font-size: 1.1rem;
         }
 
         .network-status {
+            justify-self: end;
             font-size: 0.75rem;
             padding: 4px 10px;
             border-radius: 99px;
@@ -286,9 +284,9 @@
             min-height: 48px;
             padding: 12px 10px;
             border-radius: 10px;
-            border: 2px solid var(--amber);
-            background: rgba(251, 139, 36, 0.08);
-            color: var(--text);
+            border: 3px solid var(--crimson);
+            background: var(--burnt);
+            color: white;
             font-size: 0.95rem;
             font-weight: 600;
             cursor: pointer;
@@ -300,9 +298,9 @@
         }
 
         .campus-btn.selected {
-            border-color: var(--wine);
-            background: var(--wine);
-            color: white;
+            border-color: var(--burnt);
+            background: var(--crimson);
+            box-shadow: inset 0 0 0 2px rgba(255, 255, 255, 0.55);
         }
 
         .scan-campus {
@@ -321,10 +319,8 @@
 
     <!-- Top Status Bar -->
     <div class="status-bar">
-        <div class="brand-id">
-            <span class="brand-name">tra<span class="qr-accent">QR</span>ecord</span>
-            <span id="uni-name" class="uni-name">Loading...</span>
-        </div>
+        <span id="uni-name" class="uni-name">Loading...</span>
+        <span class="brand-name">tra<span class="qr-accent">QR</span>ecord</span>
         <span id="network-status" class="network-status online">ONLINE</span>
     </div>
 
