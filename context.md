@@ -10,20 +10,33 @@ institution-specific report includes the registrant's fair location. Reports
 remain one CSV per institution; recipients can filter the `Which Fair` column
 to separate Tbilisi and Batumi attendees.
 
-Campus Intent Capture (`feature/campus-intent-capture`, not yet merged or
-deployed) adds an optional campus/location selector to the scanner for
-institutions with more than one campus. For those institutions, the
-volunteer taps the visitor's chosen campus before scanning; the choice is
-stored with that one scan and the selector immediately resets. Institutions
-without configured campuses keep the original fast, no-extra-tap flow.
-Campus options are a static, offline-embedded configuration (`CAMPUS_CONFIG`
-in `Code.gs` and `index.html`, kept identical by
-`tests/campus_config_test.js`) keyed by `Participant_ID` — the campus
-reference Google Sheet is never fetched at runtime. See `README.md` section
-8 for the volunteer workflow and `TESTING.md` for the required production
-migration order (add the `Campus` header to `Raw_Scans` before deploying the
-new `Code.gs`, and deploy the new `Code.gs` before publishing the new
-`index.html`).
+Campus Intent Capture (merged from `feature/campus-intent-capture` into
+`main`, deployed to production) adds an optional campus/location selector to
+the scanner for institutions with more than one campus. For those
+institutions, the volunteer taps the visitor's chosen campus before
+scanning; the choice is stored with that one scan and the selector
+immediately resets. Institutions without configured campuses keep the
+original fast, no-extra-tap flow. Campus options are a static,
+offline-embedded configuration (`CAMPUS_CONFIG` in `Code.gs` and
+`index.html`, kept identical by `tests/campus_config_test.js`) keyed by
+`Participant_ID` — the campus reference Google Sheet is never fetched at
+runtime. `Raw_Scans` was migrated in place to add the `Campus` header
+(`migrateRawScansAddCampusColumn()` in `Code.gs`), the production Apps
+Script was redeployed to a campus-aware version behind the same `/exec` URL,
+and the new `index.html` is live on GitHub Pages. See `README.md` section 8
+for the volunteer workflow and `TESTING.md` for the migration/rollout record.
+The `feature/campus-intent-capture` branch is kept around, not deleted.
+
+The scanner frontend (`index.html`) was subsequently given a visual
+refresh — branded **traQRecord** (shown alongside the Participant_ID on
+every screen, including the configuration-error state), restyled with a
+five-color palette (wine `#5f0f40`, crimson `#9a031e`, amber `#fb8b24`,
+burnt orange `#e36414`, teal `#0f4c5c`): a gradient frame around the camera
+view, amber-outlined/wine-filled campus buttons, a distinctly-colored recent
+scans panel, and a burnt-orange Sync Now button. This was a look-and-feel
+only change — no scanning, queueing, sync, or campus-gating behavior was
+touched, and the full test suite (frontend, Apps Script, participant links,
+email template, Python processor) still passes unchanged.
 
 Outside of that pending feature, the public scanner workflow is unchanged.
 `Code.gs`, `ParticipantLinks.gs`, and `index.html` do not need redeployment

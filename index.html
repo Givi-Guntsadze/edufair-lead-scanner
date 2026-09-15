@@ -4,18 +4,28 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>EduFair Live Scanner</title>
+    <meta name="theme-color" content="#081a1d">
+    <title>traQRecord Scanner</title>
     <script src="vendor/html5-qrcode.min.js"></script>
     <style>
         :root {
-            --primary: #3b82f6;
+            /* Brand palette */
+            --wine: #5f0f40;
+            --crimson: #9a031e;
+            --amber: #fb8b24;
+            --burnt: #e36414;
+            --teal: #0f4c5c;
+
             --success: #22c55e;
-            --warning: #f59e0b;
-            --danger: #ef4444;
-            --bg: #0f172a;
-            --card: #1e293b;
-            --text: #f1f5f9;
-            --muted: #94a3b8;
+            --warning: var(--amber);
+            --danger: var(--crimson);
+
+            --bg: #081a1d;
+            --surface: #0f2b30;
+            --surface-alt: #26101d;
+            --border: #163a40;
+            --text: #f4f1ee;
+            --muted: #9fb3b8;
         }
 
         * {
@@ -39,8 +49,25 @@
             justify-content: space-between;
             align-items: center;
             padding: 12px 16px;
-            background: var(--card);
-            border-bottom: 1px solid #334155;
+            background: var(--surface);
+            border-bottom: 1px solid var(--border);
+        }
+
+        .brand-id {
+            display: flex;
+            flex-direction: column;
+            gap: 2px;
+        }
+
+        .brand-name {
+            font-size: 0.68rem;
+            font-weight: 800;
+            letter-spacing: 0.04em;
+            color: var(--burnt);
+        }
+
+        .brand-name .qr-accent {
+            color: var(--amber);
         }
 
         .uni-name {
@@ -56,13 +83,13 @@
         }
 
         .network-status.online {
-            background: #166534;
-            color: #bbf7d0;
+            background: #123f22;
+            color: #8be6ab;
         }
 
         .network-status.offline {
-            background: #991b1b;
-            color: #fecaca;
+            background: #3d0313;
+            color: #ffb4c4;
         }
 
         /* Scanner Area */
@@ -75,10 +102,18 @@
             background: #000;
         }
 
-        #reader {
+        .reader-frame {
             width: 100%;
             max-width: 400px;
-            border-radius: 12px;
+            padding: 5px;
+            border-radius: 18px;
+            background: linear-gradient(135deg, var(--wine), var(--crimson) 35%, var(--burnt) 65%, var(--amber));
+            box-shadow: 0 8px 30px rgba(0, 0, 0, 0.45);
+        }
+
+        #reader {
+            width: 100%;
+            border-radius: 14px;
             overflow: hidden;
         }
 
@@ -88,8 +123,8 @@
             justify-content: space-between;
             align-items: center;
             padding: 12px 16px;
-            background: var(--card);
-            border-top: 1px solid #334155;
+            background: var(--surface);
+            border-top: 1px solid var(--border);
         }
 
         .pending-count {
@@ -108,13 +143,18 @@
         }
 
         .sync-btn {
-            background: var(--primary);
+            background: var(--burnt);
             color: white;
             border: none;
             padding: 8px 16px;
-            border-radius: 6px;
-            font-weight: 600;
+            border-radius: 10px;
+            font-weight: 700;
             cursor: pointer;
+            transition: transform 0.1s ease;
+        }
+
+        .sync-btn:active:not(:disabled) {
+            transform: scale(0.97);
         }
 
         .sync-btn:disabled {
@@ -126,7 +166,7 @@
         .scans-list-container {
             max-height: 200px;
             overflow-y: auto;
-            background: var(--card);
+            background: var(--surface-alt);
         }
 
         .scans-list {
@@ -138,7 +178,7 @@
             align-items: center;
             gap: 12px;
             padding: 12px 16px;
-            border-bottom: 1px solid #334155;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.08);
         }
 
         .scan-icon {
@@ -222,8 +262,8 @@
             flex-direction: column;
             gap: 10px;
             padding: 14px 16px;
-            background: var(--card);
-            border-bottom: 1px solid #334155;
+            background: var(--surface);
+            border-bottom: 1px solid var(--border);
         }
 
         .campus-selector[hidden] {
@@ -245,18 +285,23 @@
         .campus-btn {
             min-height: 48px;
             padding: 12px 10px;
-            border-radius: 8px;
-            border: 2px solid #334155;
-            background: #0f172a;
+            border-radius: 10px;
+            border: 2px solid var(--amber);
+            background: rgba(251, 139, 36, 0.08);
             color: var(--text);
             font-size: 0.95rem;
             font-weight: 600;
             cursor: pointer;
+            transition: transform 0.1s ease;
+        }
+
+        .campus-btn:active {
+            transform: scale(0.96);
         }
 
         .campus-btn.selected {
-            border-color: var(--primary);
-            background: var(--primary);
+            border-color: var(--wine);
+            background: var(--wine);
             color: white;
         }
 
@@ -276,7 +321,10 @@
 
     <!-- Top Status Bar -->
     <div class="status-bar">
-        <span id="uni-name" class="uni-name">Loading...</span>
+        <div class="brand-id">
+            <span class="brand-name">tra<span class="qr-accent">QR</span>ecord</span>
+            <span id="uni-name" class="uni-name">Loading...</span>
+        </div>
         <span id="network-status" class="network-status online">ONLINE</span>
     </div>
 
@@ -288,7 +336,9 @@
 
     <!-- Camera/Scanner -->
     <div id="reader-container">
-        <div id="reader"></div>
+        <div class="reader-frame">
+            <div id="reader"></div>
+        </div>
     </div>
 
     <!-- Sync Bar -->
@@ -378,7 +428,8 @@
         function renderConfigurationError() {
             document.body.innerHTML = `
                 <div style="padding: 40px; text-align: center;">
-                    <h1 style="color: #ef4444;">Configuration Error</h1>
+                    <div style="font-size: 0.75rem; font-weight: 800; letter-spacing: 0.04em; color: #e36414;">traQRecord</div>
+                    <h1 style="color: #9a031e; margin-top: 8px;">Configuration Error</h1>
                     <p style="color: #94a3b8; margin-top: 16px;">
                         This participant scanner link is missing, invalid, or not deployed yet.
                     </p>
@@ -824,7 +875,7 @@
             ).catch(err => {
                 console.error("Camera error:", err);
                 document.getElementById('reader').innerHTML = `
-            <div style="padding: 40px; text-align: center; color: #ef4444;">
+            <div style="padding: 40px; text-align: center; color: #ff8fa3;">
                 Camera access denied or unavailable.<br>
                 Please allow camera permissions.
             </div>
