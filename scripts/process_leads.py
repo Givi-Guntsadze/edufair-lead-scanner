@@ -115,6 +115,7 @@ def generate_reports(merged: pd.DataFrame, output_dir: str = 'reports'):
         'Which programs?', 'Age', 'Intake Year', 'Country',
         'Which Fair', 'Additional Info', 'Consent',
         'Consent (to receive communication)',
+        'Campus',
         # Fallbacks
         'name', 'email', 'phone'
     ]

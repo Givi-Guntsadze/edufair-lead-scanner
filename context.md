@@ -1,6 +1,6 @@
 # EduFair Lead Scanner Context
 
-Updated: 2026-09-01
+Updated: 2026-09-15
 
 ## Current State
 
@@ -10,8 +10,24 @@ institution-specific report includes the registrant's fair location. Reports
 remain one CSV per institution; recipients can filter the `Which Fair` column
 to separate Tbilisi and Batumi attendees.
 
-The public scanner workflow is unchanged. `Code.gs`, `ParticipantLinks.gs`, and
-`index.html` do not need redeployment for this reporting-only change.
+Campus Intent Capture (`feature/campus-intent-capture`, not yet merged or
+deployed) adds an optional campus/location selector to the scanner for
+institutions with more than one campus. For those institutions, the
+volunteer taps the visitor's chosen campus before scanning; the choice is
+stored with that one scan and the selector immediately resets. Institutions
+without configured campuses keep the original fast, no-extra-tap flow.
+Campus options are a static, offline-embedded configuration (`CAMPUS_CONFIG`
+in `Code.gs` and `index.html`, kept identical by
+`tests/campus_config_test.js`) keyed by `Participant_ID` — the campus
+reference Google Sheet is never fetched at runtime. See `README.md` section
+8 for the volunteer workflow and `TESTING.md` for the required production
+migration order (add the `Campus` header to `Raw_Scans` before deploying the
+new `Code.gs`, and deploy the new `Code.gs` before publishing the new
+`index.html`).
+
+Outside of that pending feature, the public scanner workflow is unchanged.
+`Code.gs`, `ParticipantLinks.gs`, and `index.html` do not need redeployment
+for the `Which Fair` reporting-only change described below.
 
 ## Data Flow
 

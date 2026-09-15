@@ -12,6 +12,7 @@ node tests/code_test.js
 node tests/participant_links_test.js
 node --test tests/index_test.js
 node --test tests/email_template_test.js
+node tests/campus_config_test.js
 python -m py_compile scripts/process_leads.py
 python -X utf8 tests/process_leads_test.py
 git diff --check
@@ -21,9 +22,11 @@ Expected results:
 
 - `Code.gs authorization tests passed`
 - `Participant link generation tests passed`
-- fifteen passing frontend subtests
+- twenty-nine passing frontend subtests
 - four passing confirmation-email escaping subtests
+- `Campus configuration parity tests passed`
 - Python compilation exits with code 0
+- seven passing `process_leads_test.py` cases
 - `git diff --check` produces no errors
 
 The suites cover token and UUID validation, inactive links, participant-ID
@@ -64,6 +67,70 @@ Opening the `/exec` URL directly sends GET and should return:
 
 It must not create a row in `Raw_Scans`.
 
+## Campus Intent Capture — Production Migration and Deployment
+
+This feature was implemented and automated-tested entirely on
+`feature/campus-intent-capture`. Nothing below has been run against the live
+workbook or the production Apps Script deployment. Follow this exact order
+when it is time to roll it out:
+
+1. **Add the header only.** From the Apps Script editor bound to
+   `fair-scan-file`, run `migrateRawScansAddCampusColumn()` once. It adds
+   `Campus` as column D's header and does not touch any existing header cell
+   or row. Running it again is a no-op.
+2. **Keep the current production Apps Script running.** Do not deploy the
+   new `Code.gs` yet.
+3. **Verify current production scans still append normally** with column D
+   blank — scan a real or test QR and confirm the existing three-column
+   behavior is unaffected by the new header.
+4. **Only then deploy the new Apps Script version** (this branch's
+   `Code.gs` and `ParticipantLinks.gs`) via **Deploy -> Manage deployments**,
+   selecting a new version on the existing deployment so the `/exec` URL is
+   preserved.
+5. **Verify the new server version** with the campus-aware phone matrix
+   below, using test UUIDs only.
+6. **Only after server verification, publish the new scanner frontend**
+   (this branch's `index.html`) to GitHub Pages from `main`, after this
+   branch has been reviewed and merged.
+
+Because the new `Code.gs` requires all four `Raw_Scans` headers
+(`Timestamp`, `Uni_ID`, `UUID`, `Campus`), deploying it before step 1 will
+fail closed (`server_error`) rather than silently miswrite data.
+
+## Manual Branch Testing (before merge)
+
+Do this on the feature branch, without touching production:
+
+- Serve `index.html` locally or via Codespaces (not production GitHub
+  Pages).
+- Point it at a non-production Apps Script deployment/version, or an
+  isolated test copy of `fair-scan-file`, not the live workbook.
+- Use test UUIDs only — no registration PII.
+
+Matrix:
+
+1. A non-configured Participant_ID gets the unchanged fast scanner (no
+   selector, immediate scan).
+2. A campus-enabled Participant_ID (e.g. `ieu`) shows the selector before
+   scanning.
+3. Each campus button for that institution.
+4. The `Undecided` option.
+5. Offline scanning with a campus selected.
+6. Multiple offline visitors in a row with different campus choices.
+7. Reconnect and sync; confirm each synced row carries its own campus.
+8. A duplicate visitor (same UUID scanned twice) — no second row, campus
+   reset before the next visitor.
+9. An invalid/unknown UUID — rejected, and the selected campus is retained
+   for an immediate retry.
+10. A modified `?uni=` value with the original token — still unauthorized.
+11. An invalid campus payload (tamper the request) — rejected as
+    `invalid_campus`, no row written.
+12. An inactive participant — still rejected.
+13. Token rotation still invalidates the old link and activates the new one.
+14. The generated `leads_<Uni_ID>.csv` contains the correct `Campus` value
+    per row.
+15. A legacy `raw_scans.csv` (no `Campus` column) still processes correctly.
+
 ## Live Phone Matrix
 
 Use a generated participant URL and a test UUID already present in
@@ -97,7 +164,8 @@ For one valid synchronization, inspect the browser's Network panel:
 
 After the live matrix:
 
-- `Raw_Scans` contains only timestamp, participant ID, and UUID.
+- `Raw_Scans` contains only timestamp, participant ID, UUID, and (optionally)
+  a validated Campus value — never free text.
 - `valid_tickets` contains UUIDs only.
 - `participant_url` contains no registration PII.
 - The Apps Script code contains no registration workbook ID or `openByUrl` call.
@@ -130,6 +198,11 @@ The participant report columns must include `Name`, `Last Name`, `Email`,
 and `Consent`, with `Which Fair` between `Country` and `Additional Info`.
 Registrations from Tbilisi and Batumi scanned for the same institution must
 remain in one institution CSV so the recipient can filter by city.
+
+When `raw_scans.csv` includes a `Campus` column, the report must also include
+`Campus` with the value recorded for that scan (including `Undecided`).
+A legacy `raw_scans.csv` without that column must continue producing reports
+without a `Campus` column, exactly as before.
 
 ## Troubleshooting
 

@@ -207,6 +207,63 @@
             font-weight: 700;
             color: white;
         }
+
+        .flash-overlay.tone-warning {
+            background: var(--warning);
+        }
+
+        .flash-overlay.tone-duplicate {
+            background: var(--muted);
+        }
+
+        /* Campus Intent Capture */
+        .campus-selector {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            padding: 14px 16px;
+            background: var(--card);
+            border-bottom: 1px solid #334155;
+        }
+
+        .campus-selector[hidden] {
+            display: none;
+        }
+
+        .campus-prompt {
+            font-size: 0.95rem;
+            font-weight: 600;
+            color: var(--text);
+        }
+
+        .campus-options {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+            gap: 10px;
+        }
+
+        .campus-btn {
+            min-height: 48px;
+            padding: 12px 10px;
+            border-radius: 8px;
+            border: 2px solid #334155;
+            background: #0f172a;
+            color: var(--text);
+            font-size: 0.95rem;
+            font-weight: 600;
+            cursor: pointer;
+        }
+
+        .campus-btn.selected {
+            border-color: var(--primary);
+            background: var(--primary);
+            color: white;
+        }
+
+        .scan-campus {
+            font-size: 0.8rem;
+            color: var(--muted);
+        }
     </style>
 </head>
 
@@ -221,6 +278,12 @@
     <div class="status-bar">
         <span id="uni-name" class="uni-name">Loading...</span>
         <span id="network-status" class="network-status online">ONLINE</span>
+    </div>
+
+    <!-- Campus Intent Capture selector (hidden for non-configured participants) -->
+    <div id="campus-selector" class="campus-selector" hidden>
+        <div id="campus-prompt" class="campus-prompt">Select campus before scanning</div>
+        <div id="campus-options" class="campus-options"></div>
     </div>
 
     <!-- Camera/Scanner -->
@@ -257,8 +320,32 @@
         const PERMANENT_ERROR_CODES = new Set([
             'unauthorized',
             'invalid_request',
-            'invalid_ticket'
+            'invalid_ticket',
+            'invalid_campus'
         ]);
+
+        // CAMPUS_CONFIG:BEGIN — keep in sync with the copy in Code.gs. Both
+        // copies are asserted identical by tests/campus_config_test.js. Only
+        // institutions verified against the current campus reference workbook
+        // and an existing participant_url Participant_ID are listed here.
+        // Adding a future institution should only require one more
+        // `participantId: [...]` entry ending in 'Undecided'.
+        const CAMPUS_CONFIG = Object.freeze({
+            sommet: ['Glion', 'Les Roches', 'Ecole Ducasse', 'Invictus Education', 'Indian School of Hospitality', 'Undecided'],
+            audencia: ['Paris', 'Nantes', 'Undecided'],
+            ied: ['Milan', 'Rome', 'Florence', 'Turin', 'Accademia Aldo Galli - Como', 'Madrid', 'Barcelona', 'Bilbao', 'Undecided'],
+            ieu: ['Madrid', 'Segovia', 'Undecided'],
+            nicosia: ['Nicosia', 'Athens', 'Undecided'],
+            seg: ['SHMS', 'Cesar Ritz', 'HIM Business School', 'Culinary Arts Academy', 'Undecided'],
+            ucam: ['Murcia', 'online', 'Undecided'],
+            gbsb: ['Barcelona', 'Madrid', 'Malta', 'Online', 'Undecided'],
+            skema: ['Lille', 'Paris', 'Sophia Antipolis', 'Brazil', 'Canada', 'China', 'South Africa', 'UAE', 'USA', 'Undecided'],
+            eubschool: ['Barcelona', 'Geneva', 'Munich', 'Undecided'],
+            xamk: ['Kouvola', 'Kotka', 'Mikkeli', 'Savonlinna', 'Undecided'],
+            bsbi: ['Berlin', 'Hamburg', 'Barcelona', 'Madrid', 'Paris', 'Undecided'],
+            campspain: ['Vigo', 'Madrid', 'Undecided']
+        });
+        // CAMPUS_CONFIG:END
         // =====================================================
 
         // --- STATE ---
@@ -267,6 +354,7 @@
         let isOnline = navigator.onLine;
         let isSyncing = false;
         let html5QrCode = null;
+        let selectedCampus = '';
 
         // --- Get participant identity and bearer credential from URL ---
         const urlParams = new URLSearchParams(window.location.search);
@@ -282,6 +370,10 @@
         }
 
         document.getElementById('uni-name').textContent = UNI_ID;
+
+        // --- CAMPUS INTENT CAPTURE ---
+        const CONFIGURED_CAMPUS_OPTIONS = Array.isArray(CAMPUS_CONFIG[UNI_ID]) ? CAMPUS_CONFIG[UNI_ID] : null;
+        const IS_CAMPUS_CONFIGURED = CONFIGURED_CAMPUS_OPTIONS !== null;
 
         function renderConfigurationError() {
             document.body.innerHTML = `
@@ -346,9 +438,26 @@
                 participantId,
                 token: status === 'pending' ? token : '',
                 uuid,
+                campus: normalizeStoredCampus(participantId, scan.campus),
                 timestamp,
                 status
             };
+        }
+
+        // Old queue items created before Campus Intent Capture have no
+        // `campus` field and must keep loading normally. A present value is
+        // trusted only if it exactly matches that participant's configured
+        // allowlist, so a tampered or stale localStorage entry can never
+        // smuggle an arbitrary campus string into a sync payload.
+        function normalizeStoredCampus(participantId, campusValue) {
+            if (typeof campusValue !== 'string' || campusValue === '') {
+                return '';
+            }
+            const options = CAMPUS_CONFIG[participantId];
+            if (!Array.isArray(options) || options.indexOf(campusValue) === -1) {
+                return '';
+            }
+            return campusValue;
         }
 
         function saveQueue() {
@@ -398,7 +507,7 @@
             return `scan-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
         }
 
-        function addToQueue(uuid) {
+        function addToQueue(uuid, campus) {
             // Avoid local duplicates for the same participant. Server-side
             // idempotency remains authoritative across devices and retries.
             if (scanQueue.some(scan =>
@@ -413,6 +522,7 @@
                 participantId: UNI_ID,
                 token: PARTICIPANT_TOKEN,
                 uuid: uuid,
+                campus: typeof campus === 'string' ? campus : '',
                 timestamp: new Date().toISOString(),
                 status: 'pending'
             };
@@ -460,7 +570,8 @@
                             participant_id: scan.participantId,
                             token: scan.token,
                             uuid: scan.uuid,
-                            timestamp: scan.timestamp
+                            timestamp: scan.timestamp,
+                            campus: scan.campus || ''
                         });
 
                         const response = await fetch(API_URL, {
@@ -571,6 +682,12 @@
             time.textContent = new Date(scanData.timestamp).toLocaleTimeString();
 
             info.appendChild(uuid);
+            if (scanData.campus) {
+                const campus = document.createElement('div');
+                campus.className = 'scan-campus';
+                campus.textContent = scanData.campus;
+                info.appendChild(campus);
+            }
             info.appendChild(time);
             li.appendChild(icon);
             li.appendChild(info);
@@ -587,10 +704,65 @@
             }
         }
 
-        function showFlash() {
+        function showFlash(message, tone) {
             const overlay = document.getElementById('flash-overlay');
+            const textEl = overlay.querySelector('.flash-text');
+            if (textEl) {
+                textEl.textContent = typeof message === 'string' && message ? message : '✓ Saved!';
+            }
+            overlay.classList.remove('tone-warning', 'tone-duplicate');
+            if (tone === 'warning' || tone === 'duplicate') {
+                overlay.classList.add(`tone-${tone}`);
+            }
             overlay.classList.add('show');
             setTimeout(() => overlay.classList.remove('show'), 300);
+        }
+
+        // --- CAMPUS SELECTOR UI ---
+        function renderCampusSelector() {
+            if (!IS_CAMPUS_CONFIGURED) return;
+
+            document.getElementById('campus-selector').hidden = false;
+
+            const optionsContainer = document.getElementById('campus-options');
+            CONFIGURED_CAMPUS_OPTIONS.forEach(option => {
+                const button = document.createElement('button');
+                button.type = 'button';
+                button.className = 'campus-btn';
+                button.textContent = option;
+                button.setAttribute('aria-pressed', 'false');
+                button.addEventListener('click', () => selectCampus(option));
+                optionsContainer.appendChild(button);
+            });
+
+            updateCampusSelectorUI();
+        }
+
+        function selectCampus(option) {
+            if (!IS_CAMPUS_CONFIGURED || CONFIGURED_CAMPUS_OPTIONS.indexOf(option) === -1) return;
+            selectedCampus = option;
+            updateCampusSelectorUI();
+        }
+
+        function resetSelectedCampus() {
+            selectedCampus = '';
+            updateCampusSelectorUI();
+        }
+
+        function updateCampusSelectorUI() {
+            if (!IS_CAMPUS_CONFIGURED) return;
+
+            const promptEl = document.getElementById('campus-prompt');
+            promptEl.textContent = selectedCampus
+                ? `Selected: ${selectedCampus}`
+                : 'Select campus before scanning';
+
+            const optionsContainer = document.getElementById('campus-options');
+            Array.prototype.forEach.call(optionsContainer.children, button => {
+                const isSelected = button.textContent === selectedCampus;
+                button.classList[isSelected ? 'add' : 'remove']('selected');
+                button.setAttribute('aria-pressed', isSelected ? 'true' : 'false');
+            });
         }
 
         // --- SCANNER ---
@@ -600,17 +772,31 @@
                 return;
             }
 
-            // Add to queue
-            const scanData = addToQueue(decodedText);
+            // A configured institution must have a campus selected before a
+            // scan can become a new queue item. Keep the selection so the
+            // volunteer can immediately retry the same visitor's QR.
+            if (IS_CAMPUS_CONFIGURED && !selectedCampus) {
+                showFlash('Select a campus first', 'warning');
+                return;
+            }
+
+            const campusForScan = IS_CAMPUS_CONFIGURED ? selectedCampus : '';
+            const scanData = addToQueue(decodedText, campusForScan);
 
             if (scanData) {
                 // Visual feedback
-                showFlash();
+                showFlash(scanData.campus ? `✓ Saved - ${scanData.campus}` : '✓ Saved!');
                 addScanToListUI(scanData);
                 updateUI();
+                resetSelectedCampus();
 
                 // Try to sync immediately
                 sync();
+            } else {
+                // Already queued locally for this visitor. Reset the campus
+                // selection so it cannot leak into the next visitor's scan.
+                showFlash('Already scanned', 'duplicate');
+                resetSelectedCampus();
             }
         }
 
@@ -623,6 +809,7 @@
             saveQueue();
             updateNetworkStatus();
             updateUI();
+            renderCampusSelector();
 
             // Render existing scans from queue (newest first)
             [...scanQueue].reverse().forEach(scan => addScanToListUI(scan));

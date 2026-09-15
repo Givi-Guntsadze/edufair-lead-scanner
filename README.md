@@ -67,8 +67,12 @@ case-sensitive tab names and headers:
 
 ### `Raw_Scans`
 
-| Timestamp | Uni_ID | UUID |
-| --- | --- | --- |
+| Timestamp | Uni_ID | UUID | Campus |
+| --- | --- | --- | --- |
+
+`Campus` is optional scan metadata, not registration PII. It is populated
+only for institutions with configured campus options (see "Campus Intent
+Capture" below); other scans leave it blank.
 
 ### `participant_url`
 
@@ -205,9 +209,69 @@ used for display, while the token in the URL fragment authorizes synchronization
   forever.
 - Network and temporary server failures remain pending for automatic retry.
 
-`Raw_Scans` contains only `Timestamp`, `Uni_ID`, and `UUID`.
+`Raw_Scans` contains `Timestamp`, `Uni_ID`, `UUID`, and optionally `Campus`.
 
-## 8. Post-Event Processing
+## 8. Campus Intent Capture
+
+Some institutions have more than one campus or location. For those
+institutions, the volunteer asks the visitor which campus they are
+interested in, taps that option in the scanner, and only then scans the
+visitor's QR code. The selected campus is stored with that one scan and the
+selector immediately clears, so the next visitor must be asked again.
+
+Institutions without configured campus options keep the original fast
+scanning flow: no selector appears and no extra tap is required.
+
+### Where the configuration lives
+
+Campus options are a static, offline-safe configuration keyed by
+`Participant_ID`, kept identical in both `Code.gs` and `index.html` (the
+`CAMPUS_CONFIG` constant in each file, between matching `CAMPUS_CONFIG:BEGIN`
+/ `CAMPUS_CONFIG:END` markers). `tests/campus_config_test.js` asserts the two
+copies never drift apart. The scanner never fetches the campus reference
+Google Sheet at runtime, so it remains fully offline-capable.
+
+To add another institution later, add one more entry ending in
+`'Undecided'` to both copies:
+
+```javascript
+participantId: [
+    'Campus A',
+    'Campus B',
+    'Undecided'
+]
+```
+
+### Offline and backward-compatible behavior
+
+- Campus is attached to the individual queued scan object, not a shared
+  global. Changing the on-screen selection later never mutates an
+  already-queued scan, and syncing always sends the campus that was stored
+  with that specific scan.
+- Older queue items created before this feature (or by institutions with no
+  configured campus) simply have no `campus` value; `normalizeStoredScan`
+  keeps loading them normally.
+- The server treats `campus` as optional protocol metadata: a request
+  without it remains valid. A supplied value is validated only against the
+  authenticated participant's own configured allowlist (which always
+  includes `Undecided`); any other value is rejected with `invalid_campus`
+  and nothing is written.
+
+### Post-event export
+
+`scripts/process_leads.py` includes a `Campus` column in the institution
+report whenever the joined data has one. Legacy `raw_scans.csv` exports
+without a `Campus` column, and non-campus institutions, continue to generate
+reports exactly as before.
+
+### Safe schema migration
+
+`Raw_Scans` gains `Campus` as an additive fourth column. See `TESTING.md`
+for the exact production migration and staged deployment order — the header
+must be added, and verified safe under the *current* production Apps
+Script, before the new campus-aware server code is ever deployed.
+
+## 9. Post-Event Processing
 
 The registration export uses these columns (surrounding header whitespace is
 trimmed automatically): `timestamp`, `Name`, `Last Name`, `Email`, `Phone`,
@@ -228,7 +292,8 @@ python scripts/process_leads.py
 The script joins the two files by UUID and creates `reports/leads_<Uni_ID>.csv`
 for every participant with accepted scans. `participant_url` and
 `valid_tickets` are not Python inputs. Each institution receives one CSV with a
-`Which Fair` column that it can filter by city.
+`Which Fair` column that it can filter by city, and a `Campus` column when the
+scan data includes one.
 
 ## Automated Tests
 
@@ -239,6 +304,7 @@ node tests/code_test.js
 node tests/participant_links_test.js
 node --test tests/index_test.js
 node --test tests/email_template_test.js
+node tests/campus_config_test.js
 python -X utf8 tests/process_leads_test.py
 python -m py_compile scripts/process_leads.py
 ```

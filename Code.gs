@@ -12,7 +12,7 @@ const SCAN_SHEETS = Object.freeze({
 });
 
 const SCAN_HEADERS = Object.freeze({
-  RAW_SCANS: ['Timestamp', 'Uni_ID', 'UUID'],
+  RAW_SCANS: ['Timestamp', 'Uni_ID', 'UUID', 'Campus'],
   PARTICIPANTS: [
     'Participant_Name',
     'Participant_ID',
@@ -22,6 +22,29 @@ const SCAN_HEADERS = Object.freeze({
   ],
   VALID_TICKETS: ['UUID']
 });
+
+// CAMPUS_CONFIG:BEGIN — keep in sync with the copy in index.html. Both
+// copies are asserted identical by tests/campus_config_test.js. Only
+// institutions verified against the current campus reference workbook and
+// an existing participant_url Participant_ID are listed here. Adding a
+// future institution should only require one more `participantId: [...]`
+// entry ending in 'Undecided'.
+const CAMPUS_CONFIG = Object.freeze({
+  sommet: ['Glion', 'Les Roches', 'Ecole Ducasse', 'Invictus Education', 'Indian School of Hospitality', 'Undecided'],
+  audencia: ['Paris', 'Nantes', 'Undecided'],
+  ied: ['Milan', 'Rome', 'Florence', 'Turin', 'Accademia Aldo Galli - Como', 'Madrid', 'Barcelona', 'Bilbao', 'Undecided'],
+  ieu: ['Madrid', 'Segovia', 'Undecided'],
+  nicosia: ['Nicosia', 'Athens', 'Undecided'],
+  seg: ['SHMS', 'Cesar Ritz', 'HIM Business School', 'Culinary Arts Academy', 'Undecided'],
+  ucam: ['Murcia', 'online', 'Undecided'],
+  gbsb: ['Barcelona', 'Madrid', 'Malta', 'Online', 'Undecided'],
+  skema: ['Lille', 'Paris', 'Sophia Antipolis', 'Brazil', 'Canada', 'China', 'South Africa', 'UAE', 'USA', 'Undecided'],
+  eubschool: ['Barcelona', 'Geneva', 'Munich', 'Undecided'],
+  xamk: ['Kouvola', 'Kotka', 'Mikkeli', 'Savonlinna', 'Undecided'],
+  bsbi: ['Berlin', 'Hamburg', 'Barcelona', 'Madrid', 'Paris', 'Undecided'],
+  campspain: ['Vigo', 'Madrid', 'Undecided']
+});
+// CAMPUS_CONFIG:END
 
 const TOKEN_PATTERN = /^[a-f0-9]{64}$/;
 const TICKET_ID_PATTERN = /^[A-Z0-9]{8}$/;
@@ -84,6 +107,13 @@ function handleScanRequest(e) {
       return createResponse({ result: 'error', code: 'unauthorized' });
     }
 
+    // Campus is optional protocol metadata. Validate it only against the
+    // authenticated participant's own configured allowlist so an arbitrary
+    // or mismatched value can never reach Raw_Scans.
+    if (!isValidCampusValue(participant.id, data.campus)) {
+      return createResponse({ result: 'error', code: 'invalid_campus' });
+    }
+
     if (!ticketExists(ticketSheet, data.uuid)) {
       return createResponse({ result: 'error', code: 'invalid_ticket' });
     }
@@ -103,7 +133,10 @@ function handleScanRequest(e) {
       rawScanSheet.appendRow([
         new Date(data.timestamp),
         neutralizeFormula(participant.id),
-        neutralizeFormula(data.uuid)
+        neutralizeFormula(data.uuid),
+        (typeof data.campus === 'string' && data.campus !== '')
+          ? neutralizeFormula(data.campus)
+          : ''
       ]);
       SpreadsheetApp.flush();
 
@@ -139,8 +172,26 @@ function parsePostParameters(e) {
     participant_id: parameters.participant_id,
     token: parameters.token,
     uuid: parameters.uuid,
-    timestamp: parameters.timestamp
+    timestamp: parameters.timestamp,
+    campus: parameters.campus
   };
+}
+
+/**
+ * Campus is optional scan metadata. An absent or empty value is always
+ * valid (legacy queue items and non-configured institutions). A supplied
+ * value is valid only if it exactly matches one of the authenticated
+ * participant's configured options.
+ */
+function isValidCampusValue(participantId, campus) {
+  if (campus === undefined || campus === null || campus === '') {
+    return true;
+  }
+  if (typeof campus !== 'string') {
+    return false;
+  }
+  const configuredCampuses = CAMPUS_CONFIG[participantId];
+  return Array.isArray(configuredCampuses) && configuredCampuses.indexOf(campus) !== -1;
 }
 
 function requireSheetWithHeaders(spreadsheet, sheetName, requiredHeaders) {
@@ -319,6 +370,46 @@ function setup() {
     SCAN_SHEETS.VALID_TICKETS,
     SCAN_HEADERS.VALID_TICKETS
   );
+}
+
+/**
+ * Run manually, once, from the Apps Script editor before deploying this
+ * Campus-aware server version — and only after the current production
+ * version is still running normally. Adds only the 'Campus' header to
+ * column D of Raw_Scans. It never touches existing headers or rows, and it
+ * is idempotent: running it again after the header exists is a no-op.
+ */
+function migrateRawScansAddCampusColumn() {
+  const spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
+  if (!spreadsheet) {
+    throw new Error('Run this migration from the Apps Script project bound to fair-scan-file.');
+  }
+
+  const sheet = spreadsheet.getSheetByName(SCAN_SHEETS.RAW_SCANS);
+  if (!sheet) {
+    throw new Error('Missing required scanner sheet: ' + SCAN_SHEETS.RAW_SCANS);
+  }
+
+  const legacyHeaders = sheet.getRange(1, 1, 1, 3).getValues()[0];
+  const legacyHeadersValid = ['Timestamp', 'Uni_ID', 'UUID'].every(function(header, index) {
+    return legacyHeaders[index] === header;
+  });
+  if (!legacyHeadersValid) {
+    throw new Error('Raw_Scans does not have the expected Timestamp, Uni_ID, UUID headers.');
+  }
+
+  const campusHeaderCell = sheet.getRange(1, 4, 1, 1);
+  const existingCampusHeader = campusHeaderCell.getValue();
+  if (existingCampusHeader === 'Campus') {
+    return { migrated: false, alreadyPresent: true };
+  }
+  if (existingCampusHeader !== '') {
+    throw new Error('Column D of Raw_Scans is not empty and is not already "Campus".');
+  }
+
+  campusHeaderCell.setValue('Campus');
+  campusHeaderCell.setFontWeight('bold');
+  return { migrated: true, alreadyPresent: false };
 }
 
 function ensureAdministrativeSheet(spreadsheet, sheetName, headers) {
