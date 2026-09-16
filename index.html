@@ -56,6 +56,29 @@
             border-radius: 14px;
         }
 
+        @media (max-width: 480px) {
+            .status-bar {
+                grid-template-columns: 1fr 1fr;
+                grid-template-areas:
+                    "brand brand"
+                    "id status";
+                row-gap: 14px;
+                column-gap: 10px;
+            }
+
+            .brand-block {
+                grid-area: brand;
+            }
+
+            .id-chip {
+                grid-area: id;
+            }
+
+            .status-chip {
+                grid-area: status;
+            }
+        }
+
         .id-chip {
             justify-self: start;
             display: flex;
@@ -162,6 +185,12 @@
         #reader {
             width: 100%;
             height: 100%;
+        }
+
+        #reader video {
+            object-fit: cover !important;
+            width: 100% !important;
+            height: 100% !important;
         }
 
         .corner {
@@ -1411,7 +1440,14 @@
             html5QrCode = new Html5Qrcode("reader");
             html5QrCode.start(
                 { facingMode: "environment" },
-                { fps: 10, qrbox: { width: 250, height: 250 } },
+                {
+                    fps: 10,
+                    qrbox: (viewfinderWidth, viewfinderHeight) => {
+                        const edge = Math.min(viewfinderWidth, viewfinderHeight);
+                        const size = Math.floor(edge * 0.7);
+                        return { width: size, height: size };
+                    }
+                },
                 onScanSuccess,
                 onScanFailure
             ).catch(err => {
