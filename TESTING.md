@@ -22,7 +22,7 @@ Expected results:
 
 - `Code.gs authorization tests passed`
 - `Participant link generation tests passed`
-- forty passing frontend subtests
+- forty-five passing frontend subtests
 - four passing confirmation-email escaping subtests
 - `Campus configuration parity tests passed`
 - Python compilation exits with code 0
@@ -31,8 +31,10 @@ Expected results:
 
 The suites cover token and UUID validation, inactive links, participant-ID
 substitution, duplicate idempotency, formula injection, safe DOM rendering,
-POST-body synchronization, offline persistence, rejected scans, and transient
-retry behavior.
+POST-body synchronization, offline persistence, rejected scans, transient
+retry behavior, request-timeout handling, micro-batching, and the
+valid-ticket/participant/duplicate caches (including their miss and
+revocation/rotation behavior).
 
 ## Apps Script Pre-deployment Check
 
@@ -97,6 +99,27 @@ Because the new `Code.gs` requires all four `Raw_Scans` headers
 (`Timestamp`, `Uni_ID`, `UUID`, `Campus`), deploying it before step 1 will
 fail closed (`server_error`) rather than silently miswrite data.
 
+## High-Volume Synchronization — Deployment
+
+This changes only the request/response protocol and internal Apps Script
+performance (batching, caching, lock scope); it does not change validation
+rules, authentication, campus rules, or the `Raw_Scans` schema. No sheet
+migration is required. Roll it out like any other `Code.gs` change:
+
+1. Confirm the automated suite passes (above), including the batching and
+   caching tests.
+2. Replace the Apps Script editor's `Code.gs` with the current `main` version
+   and deploy a new version via **Deploy -> Manage deployments** (same
+   `/exec` URL). See section 5 of `README.md`.
+3. Because `Code.gs` accepts both the new batched JSON protocol and the
+   original single-scan form-encoded protocol, this redeploy is safe
+   regardless of whether the updated `index.html` is already live on GitHub
+   Pages or not — neither ordering causes scans to be silently rejected.
+4. Scan a handful of test UUIDs and confirm rows still land in `Raw_Scans`
+   with the right `Uni_ID`, `UUID`, and `Campus`.
+5. Optionally scan the same test UUID from two different participant links
+   to confirm both are accepted independently (see the Live Phone Matrix).
+
 ## Manual Branch Testing (before merge)
 
 Do this on the feature branch, without touching production:
@@ -147,6 +170,8 @@ Use a generated participant URL and a test UUID already present in
 | Disable network and scan a valid UUID | Yellow pending item remains locally |
 | Restore network | Pending item syncs once and turns green |
 | Temporary server/network failure | Item remains pending and retries later |
+| Scan 5-6 visitors back-to-back | Each is saved and shown instantly; no waiting between captures |
+| Same visitor's QR scanned at a second institution's table | Second scan also succeeds (independent `Uni_ID` + `UUID` pair) |
 
 ## Browser Network Inspection
 
@@ -155,9 +180,11 @@ For one valid synchronization, inspect the browser's Network panel:
 - Method is `POST`.
 - Request URL is exactly the configured Apps Script `/exec` URL.
 - The participant token is absent from the request URL.
-- The URL-encoded request body contains `participant_id`, `token`, `uuid`, and
-  `timestamp`.
-- The response is `{ "result": "success", ... }`.
+- The JSON request body is `{ "scans": [ { "client_id", "participant_id",
+  "token", "uuid", "timestamp", "campus" }, ... ] }` — up to 10 scans per
+  request when several are pending at once.
+- The response is `{ "results": [ { "client_id", "result": "success", ... },
+  ... ] }`, one entry per scan in the request, matched back by `client_id`.
 - The browser console does not contain the token.
 
 ## Sheet and Privacy Check
@@ -248,4 +275,6 @@ present, which is enough to diagnose a symptom without exposing a credential.
 | Valid QR is rejected | Confirm n8n wrote the exact uppercase eight-character UUID to `valid_tickets`. If the diagnostic log for that request shows `invalid_campus` instead of `invalid_ticket`, the UUID is fine — the live Apps Script deployment is missing that institution's `CAMPUS_CONFIG` entry and needs to be redeployed with the current `Code.gs` (Deploy -> Manage deployments -> new version). Merging `Code.gs` to `main` never updates the live backend by itself. |
 | Item stays pending | Read its on-screen reason (`server_busy`, `server_error`, or `network`); check connectivity, Apps Script executions, deployment access, and the raw POST response |
 | `server_error` response | Verify all three exact tab names and header rows |
-| Old link still works after rotation | Confirm the latest Apps Script version is deployed and the old hash was replaced |
+| Old link still works after rotation | Confirm the latest Apps Script version is deployed and the old hash was replaced. This can also be the participant-auth cache: a rotated or just-revoked (`Active` -> `FALSE`) link can keep working for up to 60 seconds after the sheet change, by design — wait a minute and retry before concluding the deployment is stale. |
+| A newly registered visitor's QR is rejected right after registration | Confirm the UUID actually reached `valid_tickets` (n8n write order). It is not a caching delay — a UUID not yet seen by this Apps Script instance always falls back to a live sheet read, so it is usable on the very first scan attempt once it is actually in the sheet. |
+| Many volunteers scanning at once, occasional `server_busy` | Expected under load: the lock wait is now ~2 seconds by design (see README section 9), not 10. Affected scans retry automatically within seconds; this is not a stuck/broken deployment. |

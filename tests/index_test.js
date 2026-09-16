@@ -111,6 +111,7 @@ function createHarness({
   const consoleMessages = [];
   const responseQueue = [...fetchResponses];
   let scannerStarts = 0;
+  let uuidCounter = 0;
 
   if (initialQueue !== undefined) {
     storage.set(STORAGE_KEY, JSON.stringify(initialQueue));
@@ -133,18 +134,52 @@ function createHarness({
     return Promise.resolve();
   };
 
+  // Each queued response corresponds to one *scan* (in request order), not
+  // one HTTP request, since a request can now carry a batch. A response is
+  // wrapped into the { client_id, ... } shape automatically using the
+  // client_id the code under test actually sent, so most tests can keep
+  // supplying the same plain { result, code } shapes as before batching.
   async function fetch(url, options) {
     fetchCalls.push({ url, options });
-    const queued = responseQueue.shift() ?? { result: 'success', duplicate: false };
-    if (queued instanceof Error) throw queued;
+    const body = JSON.parse(options.body);
+    const scans = Array.isArray(body.scans) ? body.scans : [];
+
+    const results = [];
+    for (const scan of scans) {
+      const queued = responseQueue.shift() ?? { result: 'success', duplicate: false };
+
+      if (queued instanceof Error) {
+        throw queued;
+      }
+
+      if (queued.hangUntilAbort) {
+        return new Promise((resolve, reject) => {
+          options.signal.addEventListener('abort', () => {
+            const abortError = new Error('The operation was aborted.');
+            abortError.name = 'AbortError';
+            reject(abortError);
+          });
+        });
+      }
+
+      if (queued.ok === false) {
+        return { ok: false, async json() { return null; } };
+      }
+
+      const payload = queued.body ?? queued;
+      results.push(Object.assign({ client_id: scan.client_id }, payload));
+    }
+
     return {
-      ok: queued.ok ?? true,
+      ok: true,
       async json() {
-        if (queued.jsonError) throw new Error('invalid json');
-        return queued.body ?? queued;
+        return { results };
       }
     };
   }
+
+  const timers = new Map();
+  let nextTimerId = 1;
 
   const context = {
     console: {
@@ -152,6 +187,7 @@ function createHarness({
       log(...values) { consoleMessages.push(['log', ...values.map(String)]); },
       warn(...values) { consoleMessages.push(['warn', ...values.map(String)]); }
     },
+    AbortController,
     Date,
     document,
     fetch,
@@ -162,15 +198,23 @@ function createHarness({
     },
     navigator: { onLine: online },
     setInterval: () => 0,
-    setTimeout: callback => {
-      callback();
-      return 0;
+    setTimeout: (callback, delay) => {
+      const id = nextTimerId;
+      nextTimerId += 1;
+      timers.set(id, callback);
+      return id;
+    },
+    clearTimeout: id => {
+      timers.delete(id);
     },
     URL,
     URLSearchParams,
     window: {
-      addEventListener() {},
-      crypto: { randomUUID: () => '00000000-0000-4000-8000-000000000000' },
+      listeners: {},
+      addEventListener(eventName, handler) {
+        (this.listeners[eventName] = this.listeners[eventName] || []).push(handler);
+      },
+      crypto: { randomUUID: () => `00000000-0000-4000-8000-${String(uuidCounter++).padStart(12, '0')}` },
       location: { search, hash }
     }
   };
@@ -200,6 +244,18 @@ function createHarness({
     queue: () => JSON.parse(storage.get(STORAGE_KEY) ?? '[]'),
     scannerStarts: () => scannerStarts,
     storage,
+    triggerAllTimers() {
+      const callbacks = [...timers.values()];
+      timers.clear();
+      for (const callback of callbacks) callback();
+    },
+    goOnline() {
+      // Mirrors the real browser 'online' event index.html listens for,
+      // which is what actually flips the module-local isOnline variable
+      // (a plain vm context property assignment does not reach it).
+      context.navigator.onLine = true;
+      for (const handler of context.window.listeners.online || []) handler();
+    },
     async flushPromises() {
       await new Promise(resolve => setImmediate(resolve));
       await new Promise(resolve => setImmediate(resolve));
@@ -320,10 +376,11 @@ test('posts credentials in the body without putting the token in the URL', async
   assert.equal(call.options.referrerPolicy, 'no-referrer');
   assert.doesNotMatch(call.url, new RegExp(VALID_TOKEN));
 
-  const body = new URLSearchParams(call.options.body);
-  assert.equal(body.get('participant_id'), 'constructor');
-  assert.equal(body.get('token'), VALID_TOKEN);
-  assert.equal(body.get('uuid'), 'A1B2C3D4');
+  const body = JSON.parse(call.options.body);
+  assert.equal(body.scans.length, 1);
+  assert.equal(body.scans[0].participant_id, 'constructor');
+  assert.equal(body.scans[0].token, VALID_TOKEN);
+  assert.equal(body.scans[0].uuid, 'A1B2C3D4');
   assert.equal(harness.queue()[0].status, 'synced');
   assert.equal(
     harness.consoleMessages.flat().some(value => value.includes(VALID_TOKEN)),
@@ -465,6 +522,132 @@ test('keeps network failures pending without logging credentials', async () => {
   );
 });
 
+// --- High-volume batch synchronization ---
+
+test('6 rapid scans from one institution sync in a single batched request', async () => {
+  // Scanned while offline so none of them race ahead individually via the
+  // post-capture "sync immediately" call: all 6 land in localStorage first,
+  // then a single reconnect triggers one batch covering all of them.
+  const harness = createHarness({ online: false });
+  const uuids = ['AAAA1111', 'BBBB2222', 'CCCC3333', 'DDDD4444', 'EEEE5555', 'FFFF6666'];
+  for (const uuid of uuids) {
+    harness.context.onScanSuccess(uuid);
+  }
+  assert.equal(harness.queue().length, 6, 'every scan is saved locally immediately, even while offline');
+  assert.equal(harness.fetchCalls.length, 0, 'nothing is sent while offline');
+
+  harness.goOnline();
+  await harness.flushPromises();
+
+  assert.equal(harness.fetchCalls.length, 1, 'all 6 pending scans are sent in exactly one request');
+  const body = JSON.parse(harness.fetchCalls[0].options.body);
+  assert.equal(body.scans.length, 6, 'the single request batches every pending scan');
+  assert.deepEqual(body.scans.map(scan => scan.uuid), uuids);
+
+  assert.ok(harness.queue().every(scan => scan.status === 'synced'), 'every scan in the batch resolves independently to synced');
+});
+
+test('a backlog larger than the batch size drains over successive sync calls', async () => {
+  // Queued while offline for the same reason as above: this isolates the
+  // batch-size cap from the "sync immediately after capture" race.
+  const harness = createHarness({ online: false });
+  const uuids = [];
+  for (let i = 0; i < 12; i += 1) {
+    uuids.push('BULK' + String(i).padStart(4, '0'));
+  }
+  for (const uuid of uuids) {
+    harness.context.onScanSuccess(uuid);
+  }
+  assert.equal(harness.queue().length, 12);
+
+  harness.goOnline();
+  await harness.flushPromises();
+
+  while (harness.queue().some(scan => scan.status === 'pending')) {
+    await harness.context.sync();
+    await harness.flushPromises();
+  }
+
+  assert.ok(harness.queue().every(scan => scan.status === 'synced'));
+  assert.ok(harness.fetchCalls.length >= 2, 'a 12-item backlog needs more than one batch to fully drain');
+  for (const call of harness.fetchCalls) {
+    const body = JSON.parse(call.options.body);
+    assert.ok(body.scans.length <= 10, 'no single request ever exceeds the batch size cap');
+  }
+});
+
+test('a mixed batch resolves every scan to its own independent outcome', async () => {
+  // Queued while offline so all 4 land in one batch together, rather than
+  // the first racing ahead alone via the post-capture "sync immediately"
+  // call (see the batching tests above for that behavior specifically).
+  const harness = createHarness({
+    online: false,
+    fetchResponses: [
+      { result: 'success', duplicate: false },
+      { result: 'success', duplicate: true },
+      { result: 'error', code: 'invalid_ticket' },
+      { result: 'error', code: 'server_busy' }
+    ]
+  });
+
+  harness.context.onScanSuccess('AAAA1111');
+  harness.context.onScanSuccess('BBBB2222');
+  harness.context.onScanSuccess('CCCC3333');
+  harness.context.onScanSuccess('DDDD4444');
+  harness.goOnline();
+  await harness.flushPromises();
+
+  assert.equal(harness.fetchCalls.length, 1, 'all 4 scans are sent together in one batch');
+  const queue = harness.queue();
+  assert.equal(queue[0].status, 'synced');
+  assert.equal(queue[1].status, 'synced');
+  assert.equal(queue[2].status, 'rejected');
+  assert.equal(queue[2].rejectionCode, 'invalid_ticket');
+  assert.equal(queue[3].status, 'pending');
+  assert.equal(queue[3].transientCode, 'server_busy');
+});
+
+test('a request timeout leaves scans pending and is treated as transient, not a permanent rejection', async () => {
+  const harness = createHarness({
+    online: true,
+    fetchResponses: [{ hangUntilAbort: true }]
+  });
+  harness.context.onScanSuccess('A1B2C3D4');
+  await harness.flushPromises();
+  assert.equal(harness.queue()[0].status, 'pending', 'still in flight while the request hangs');
+
+  harness.triggerAllTimers(); // simulate the AbortController timeout firing
+  await harness.flushPromises();
+
+  assert.equal(harness.queue()[0].status, 'pending');
+  assert.equal(harness.queue()[0].transientCode, 'network');
+  assert.notEqual(harness.queue()[0].status, 'rejected', 'a timeout must never be treated as a permanent rejection');
+});
+
+test('manual Sync Now still works with batching', async () => {
+  // A pending scan already sitting in localStorage (e.g. from a previous
+  // session) and the app is online from load, so the only fetch call in
+  // this test comes from the manual button, not any automatic trigger.
+  const harness = createHarness({
+    online: true,
+    initialQueue: [{
+      id: 'preexisting-scan',
+      participantId: 'constructor',
+      token: VALID_TOKEN,
+      uuid: 'A1B2C3D4',
+      timestamp: '2026-07-27T12:00:00.000Z',
+      status: 'pending'
+    }]
+  });
+  assert.equal(harness.fetchCalls.length, 0, 'no automatic sync happened just from loading with a pending item');
+
+  harness.elements.get('sync-btn').listeners.click[0]();
+  await harness.flushPromises();
+
+  assert.equal(harness.fetchCalls.length, 1);
+  assert.equal(harness.queue()[0].status, 'synced');
+});
+
 // --- Campus Intent Capture ---
 
 const CONFIGURED_SEARCH = '?uni=ieu';
@@ -582,8 +765,8 @@ test('sync payload sends the campus belonging to each queued scan', async () => 
   await harness.flushPromises();
 
   assert.equal(harness.fetchCalls.length, 1);
-  const body = new URLSearchParams(harness.fetchCalls[0].options.body);
-  assert.equal(body.get('campus'), 'Segovia');
+  const body = JSON.parse(harness.fetchCalls[0].options.body);
+  assert.equal(body.scans[0].campus, 'Segovia');
 });
 
 test('unconfigured participant syncs with an empty campus field', async () => {
@@ -591,8 +774,8 @@ test('unconfigured participant syncs with an empty campus field', async () => {
   harness.context.onScanSuccess('A1B2C3D4');
   await harness.flushPromises();
 
-  const body = new URLSearchParams(harness.fetchCalls[0].options.body);
-  assert.equal(body.get('campus'), '');
+  const body = JSON.parse(harness.fetchCalls[0].options.body);
+  assert.equal(body.scans[0].campus, '');
 });
 
 test('legacy local queue objects without a campus field normalize safely', () => {

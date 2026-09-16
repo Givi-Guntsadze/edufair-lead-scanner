@@ -1,6 +1,6 @@
 # EduFair Lead Scanner Context
 
-Updated: 2026-09-15
+Updated: 2026-09-16
 
 ## Current State
 
@@ -37,6 +37,30 @@ scans panel, and a burnt-orange Sync Now button. This was a look-and-feel
 only change — no scanning, queueing, sync, or campus-gating behavior was
 touched, and the full test suite (frontend, Apps Script, participant links,
 email template, Python processor) still passes unchanged.
+
+A high-volume synchronization optimization was implemented on
+`feature/high-volume-sync-optimization` (not yet merged to `main`, not
+deployed). It targets the real event-day load: 30+ participant tables
+scanning simultaneously, one volunteer scanning several visitors
+back-to-back, and the same visitor legitimately being scanned by multiple
+institutions. `index.html` now sends pending scans in micro-batches (up to
+10 per request, JSON body) with a 9-second `AbortController` timeout instead
+of one unbounded request per scan, so scanning itself is never blocked on
+Google Sheets. `Code.gs` adds `CacheService`-backed caching for valid-ticket
+lookups, participant authentication, and duplicate detection (each with its
+own documented TTL and a cache-miss that always falls back to a live sheet
+read, so a cache can never authorize something the sheet doesn't actually
+say is valid), narrows the script lock to a ~2-second wait around only the
+final write, and writes accepted scans in one batched range write instead of
+one `appendRow()` each. `Code.gs` still accepts the original single-scan
+form-encoded protocol alongside the new batched one, specifically so the
+frontend and backend can be redeployed independently without a deployment
+ordering mistake silently rejecting every scan (the exact failure mode hit
+once already with a `CAMPUS_CONFIG` update — see the `invalid_campus` row in
+`TESTING.md`'s troubleshooting table). Duplicate semantics, authentication,
+UUID/campus validation, and the `Raw_Scans` schema are all unchanged. See
+`README.md` section 9 for the full design and `TESTING.md` for the
+deployment and verification steps.
 
 Outside of that pending feature, the public scanner workflow is unchanged.
 `Code.gs`, `ParticipantLinks.gs`, and `index.html` do not need redeployment

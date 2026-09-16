@@ -199,15 +199,22 @@ matrix in `TESTING.md` pass.
 A participant opens their generated `Scanner_URL`. The public participant ID is
 used for display, while the token in the URL fragment authorizes synchronization.
 
-- Valid scans are queued locally and sync when online.
+- A scan is saved to the local queue immediately on capture; the volunteer can
+  scan the next visitor right away without waiting on the network.
+- Pending scans sync in micro-batches (up to 10 per request, immediately after
+  every capture and again every 5 seconds) instead of one HTTP request per
+  scan. See "9. High-Volume Synchronization" for the full design.
 - The token is sent in a POST body, not in the Apps Script request URL.
 - Apps Script derives the trusted `Uni_ID` from the token.
 - The UUID must exist in `valid_tickets`.
 - A repeated `Uni_ID + UUID` pair is treated as a successful duplicate and is
-  not appended again.
-- Invalid participant links or tickets are marked rejected rather than retried
-  forever.
-- Network and temporary server failures remain pending for automatic retry.
+  not appended again. The same UUID scanned by a *different* institution is a
+  separate, independently valid pair.
+- Invalid participant links, campuses, or tickets are marked rejected rather
+  than retried forever, with a human-readable reason shown next to the scan.
+- Network failures, request timeouts, and a busy backend all remain pending
+  for automatic retry, shown with their own reason (e.g. "server busy,
+  retrying").
 
 `Raw_Scans` contains `Timestamp`, `Uni_ID`, `UUID`, and optionally `Campus`.
 
@@ -271,7 +278,88 @@ for the exact production migration and staged deployment order — the header
 must be added, and verified safe under the *current* production Apps
 Script, before the new campus-aware server code is ever deployed.
 
-## 9. Post-Event Processing
+## 9. High-Volume Synchronization
+
+The scanner is designed for 30+ participant tables scanning simultaneously,
+with one volunteer capable of scanning several visitors back-to-back and the
+same visitor legitimately being scanned by multiple institutions.
+
+### Micro-batching
+
+`index.html` sends up to 10 pending scans per HTTP request (a JSON body of
+`{ scans: [...] }`) instead of one request per scan. Each scan keeps its own
+participant ID, bearer credential, UUID, campus, and timestamp; a batch never
+mixes them up. Every scan gets its own outcome back from the server (matched
+by a client-generated `client_id`, not by array position), so one rejected or
+still-pending scan in a batch never affects the others. A backlog larger than
+10 drains across successive sync ticks rather than in one request.
+
+`Code.gs` also still accepts the original single-scan
+`application/x-www-form-urlencoded` request and answers with the original
+flat `{ result, code, duplicate }` shape. This is not a legacy compatibility
+shim for old devices — it exists so the static frontend (GitHub Pages) and
+the Apps Script backend, which redeploy independently and manually, can never
+silently reject every scan just because one was updated before the other.
+
+### Request timeout
+
+Every sync request carries a 9-second `AbortController` timeout. A timed-out
+request is treated exactly like a network failure — the scans in that batch
+stay pending and retry automatically — never a permanent rejection. This
+keeps one slow or hung request from blocking the sync loop indefinitely.
+
+### Caching (Apps Script `CacheService`)
+
+Three lookups that used to read a full sheet on every single scan are now
+cache-assisted:
+
+| Cache | Key | TTL | Caches | Miss behavior |
+| --- | --- | --- | --- | --- |
+| Valid ticket | UUID | 5 min | Only confirmed-valid UUIDs | Falls back to a live `valid_tickets` read; a brand-new ticket is usable on the very next scan, not bounded by the TTL |
+| Participant auth | token hash | 60 sec | Both found-active and not-found/inactive | Falls back to a live `participant_url` read |
+| Duplicate (`Uni_ID`+`UUID`) | hash of the pair | 6 hours (event-day) | Only confirmed-written pairs | Falls back to a live `Raw_Scans` read |
+
+None of these caches can ever authorize a UUID that isn't genuinely in
+`valid_tickets`: a cache miss always re-checks the sheet before rejecting, so
+"not yet cached" is never treated as "invalid." `valid_tickets` therefore
+remains the sole source of truth.
+
+The participant cache is the one deliberate tradeoff: because it caches
+*both* outcomes for up to 60 seconds, a just-revoked (`Active` -> `FALSE`) or
+just-rotated participant link can keep working for up to that window. 60
+seconds was chosen because revocation/rotation is already a manual,
+non-emergency organizer action (see section 4) — not a live incident
+response — so a short bounded delay is an acceptable tradeoff for avoiding a
+`participant_url` read on nearly every scan.
+
+### Lock scope and duration
+
+The script lock (`LockService`) now protects only the final write phase — a
+cache recheck plus one batched range write — never validation, ticket/
+participant lookups, or the pre-lock duplicate check. The wait is 2 seconds,
+not the previous 10: a batch that can't get the lock in that window returns
+`server_busy` immediately for the affected scans, which stay pending and
+retry automatically, rather than holding a volunteer's device on an open
+connection for up to 10 seconds. A batch made up entirely of duplicates never
+takes the lock at all.
+
+### Duplicate semantics (unchanged)
+
+Duplicate detection is still scoped to `Uni_ID + UUID`, never globally by
+UUID alone:
+
+```
+SKEMA + ABC12345  -> valid
+INTO  + ABC12345  -> also valid (different institution, same visitor)
+SKEMA + ABC12345  -> duplicate success, no second row
+```
+
+### Efficient writes
+
+Accepted scans in a batch are written with one `Range.setValues()` call
+instead of one `appendRow()` per scan.
+
+## 10. Post-Event Processing
 
 The registration export uses these columns (surrounding header whitespace is
 trimmed automatically): `timestamp`, `Name`, `Last Name`, `Email`, `Phone`,
