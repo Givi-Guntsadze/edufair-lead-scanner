@@ -42,7 +42,10 @@ const CAMPUS_CONFIG = Object.freeze({
   eubschool: ['Barcelona', 'Geneva', 'Munich', 'Undecided'],
   xamk: ['Kouvola', 'Kotka', 'Mikkeli', 'Savonlinna', 'Undecided'],
   bsbi: ['Berlin', 'Hamburg', 'Barcelona', 'Madrid', 'Paris', 'Undecided'],
-  campspain: ['Vigo', 'Madrid', 'Undecided']
+  campspain: ['Vigo', 'Madrid', 'Undecided'],
+  into: ['US', 'UK', 'Australia', 'Spain', 'UAE', 'Undecided'],
+  gedu: ['US', 'UK', 'Ireland', 'UAE', 'Australia', 'Germany', 'Malta', 'France', 'Spain', 'Undecided'],
+  burgsb: ['Dijon', 'Lyon', 'Undecided']
 });
 // CAMPUS_CONFIG:END
 

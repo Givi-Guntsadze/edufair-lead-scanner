@@ -14,7 +14,10 @@ const EXPECTED_CAMPUS_CONFIG = {
   eubschool: ['Barcelona', 'Geneva', 'Munich', 'Undecided'],
   xamk: ['Kouvola', 'Kotka', 'Mikkeli', 'Savonlinna', 'Undecided'],
   bsbi: ['Berlin', 'Hamburg', 'Barcelona', 'Madrid', 'Paris', 'Undecided'],
-  campspain: ['Vigo', 'Madrid', 'Undecided']
+  campspain: ['Vigo', 'Madrid', 'Undecided'],
+  into: ['US', 'UK', 'Australia', 'Spain', 'UAE', 'Undecided'],
+  gedu: ['US', 'UK', 'Ireland', 'UAE', 'Australia', 'Germany', 'Malta', 'France', 'Spain', 'Undecided'],
+  burgsb: ['Dijon', 'Lyon', 'Undecided']
 };
 
 function extractCampusConfigSnippet(source, filename) {
@@ -71,6 +74,34 @@ const indexSnippet = extractCampusConfigSnippet(indexSource, 'index.html');
     assert.ok(Array.isArray(options) && options.length > 1, `${participantId} must have more than one option`);
     assert.equal(options[options.length - 1], 'Undecided', `${participantId} must end with Undecided`);
     assert.equal(new Set(options).size, options.length, `${participantId} must not have duplicate options`);
+  }
+}
+
+{
+  // Newly added institutions must resolve to exactly the expected options,
+  // in the exact order, with no stray whitespace in any entry.
+  const config = evaluateCampusConfig(codeSnippet);
+
+  assert.deepEqual(
+    config.into,
+    ['US', 'UK', 'Australia', 'Spain', 'UAE', 'Undecided'],
+    'into must resolve to exactly the six expected options in order'
+  );
+  assert.deepEqual(
+    config.gedu,
+    ['US', 'UK', 'Ireland', 'UAE', 'Australia', 'Germany', 'Malta', 'France', 'Spain', 'Undecided'],
+    'gedu must resolve to exactly the ten expected options in order'
+  );
+  assert.deepEqual(
+    config.burgsb,
+    ['Dijon', 'Lyon', 'Undecided'],
+    'burgsb must resolve to exactly the three expected options in order'
+  );
+
+  for (const participantId of ['into', 'gedu', 'burgsb']) {
+    for (const option of config[participantId]) {
+      assert.equal(option, option.trim(), `${participantId} option "${option}" must not have stray whitespace`);
+    }
   }
 }
 
