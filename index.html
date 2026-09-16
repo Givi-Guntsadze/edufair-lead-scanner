@@ -522,6 +522,11 @@
             font-size: 0.8rem;
             color: var(--muted);
         }
+
+        .scan-reason {
+            font-size: 0.75rem;
+            color: var(--muted);
+        }
     </style>
 </head>
 
@@ -951,6 +956,30 @@
             'invalid_campus'
         ]);
 
+        const REJECTION_MESSAGES = {
+            unauthorized: 'Rejected - institution link unauthorized',
+            invalid_request: 'Rejected - invalid scan request',
+            invalid_ticket: 'Rejected - UUID not found in valid tickets',
+            invalid_campus: 'Rejected - invalid campus selection'
+        };
+
+        const TRANSIENT_MESSAGES = {
+            server_busy: 'Pending - server busy, retrying',
+            server_error: 'Pending - temporary server error, retrying',
+            network: 'Pending - waiting for connection, retrying'
+        };
+
+        function getReasonText(scan) {
+            if (!scan) return '';
+            if (scan.status === 'rejected') {
+                return REJECTION_MESSAGES[scan.rejectionCode] || 'Rejected';
+            }
+            if (scan.status === 'pending' && scan.transientCode) {
+                return TRANSIENT_MESSAGES[scan.transientCode] || '';
+            }
+            return '';
+        }
+
         // CAMPUS_CONFIG:BEGIN — keep in sync with the copy in Code.gs. Both
         // copies are asserted identical by tests/campus_config_test.js. Only
         // institutions verified against the current campus reference workbook
@@ -1071,7 +1100,13 @@
                 uuid,
                 campus: normalizeStoredCampus(participantId, scan.campus),
                 timestamp,
-                status
+                status,
+                rejectionCode: status === 'rejected' && typeof scan.rejectionCode === 'string'
+                    ? scan.rejectionCode
+                    : '',
+                transientCode: status === 'pending' && typeof scan.transientCode === 'string'
+                    ? scan.transientCode
+                    : ''
             };
         }
 
@@ -1155,7 +1190,9 @@
                 uuid: uuid,
                 campus: typeof campus === 'string' ? campus : '',
                 timestamp: new Date().toISOString(),
-                status: 'pending'
+                status: 'pending',
+                rejectionCode: '',
+                transientCode: ''
             };
 
             scanQueue.push(scanData);
@@ -1163,10 +1200,12 @@
             return scanData;
         }
 
-        function markScanStatus(id, status) {
+        function markScanStatus(id, status, code) {
             const scan = scanQueue.find(s => s.id === id);
             if (scan) {
                 scan.status = status;
+                scan.rejectionCode = status === 'rejected' && typeof code === 'string' ? code : '';
+                scan.transientCode = status === 'pending' && typeof code === 'string' ? code : '';
                 if (TERMINAL_STATUSES.has(status)) {
                     // A completed queue item no longer needs to retain a bearer
                     // credential in local storage.
@@ -1217,6 +1256,8 @@
                         });
 
                         if (!response.ok) {
+                            markScanStatus(scan.id, 'pending', 'network');
+                            updateScanItemUI(scan.id, 'pending');
                             break;
                         }
 
@@ -1228,18 +1269,23 @@
                         }
 
                         if (result && PERMANENT_ERROR_CODES.has(result.code)) {
-                            markScanStatus(scan.id, 'rejected');
+                            markScanStatus(scan.id, 'rejected', result.code);
                             updateScanItemUI(scan.id, 'rejected');
                             continue;
                         }
 
                         // Busy, malformed, and internal-error responses are
                         // transient. Leave this and later scans pending.
+                        const transientCode = result && result.code === 'server_busy' ? 'server_busy' : 'server_error';
+                        markScanStatus(scan.id, 'pending', transientCode);
+                        updateScanItemUI(scan.id, 'pending');
                         break;
                     } catch (error) {
                         // Do not log the Error object: network libraries can
                         // include the credential-bearing request body in it.
                         console.error('Scan synchronization failed');
+                        markScanStatus(scan.id, 'pending', 'network');
+                        updateScanItemUI(scan.id, 'pending');
                         break;
                     }
                 }
@@ -1320,6 +1366,12 @@
                 info.appendChild(campus);
             }
             info.appendChild(time);
+
+            const reason = document.createElement('div');
+            reason.className = 'scan-reason';
+            reason.textContent = getReasonText(scanData);
+            info.appendChild(reason);
+
             li.appendChild(icon);
             li.appendChild(info);
             list.prepend(li);
@@ -1331,6 +1383,11 @@
                 const icon = item.querySelector('.scan-icon');
                 if (icon) {
                     icon.className = `scan-icon ${status}`;
+                }
+                const reason = item.querySelector('.scan-reason');
+                if (reason) {
+                    const scan = scanQueue.find(s => s.id === id);
+                    reason.textContent = getReasonText(scan);
                 }
             }
         }

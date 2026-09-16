@@ -78,6 +78,7 @@ function handleScanRequest(e) {
       !TOKEN_PATTERN.test(data.token || '') ||
       !isValidTicketId(data.uuid) ||
       !isValidTimestamp(data.timestamp)) {
+    logDiagnostic('warn', 'scan_rejected', 'invalid_request', data);
     return createResponse({ result: 'error', code: 'invalid_request' });
   }
 
@@ -107,6 +108,7 @@ function handleScanRequest(e) {
     // The token is authoritative. The public ID is checked only to detect a
     // modified or accidentally mismatched participant link.
     if (!participant || participant.id !== data.participant_id) {
+      logDiagnostic('warn', 'scan_rejected', 'unauthorized', data);
       return createResponse({ result: 'error', code: 'unauthorized' });
     }
 
@@ -114,10 +116,12 @@ function handleScanRequest(e) {
     // authenticated participant's own configured allowlist so an arbitrary
     // or mismatched value can never reach Raw_Scans.
     if (!isValidCampusValue(participant.id, data.campus)) {
+      logDiagnostic('warn', 'scan_rejected', 'invalid_campus', data, participant);
       return createResponse({ result: 'error', code: 'invalid_campus' });
     }
 
     if (!ticketExists(ticketSheet, data.uuid)) {
+      logDiagnostic('warn', 'scan_rejected', 'invalid_ticket', data, participant);
       return createResponse({ result: 'error', code: 'invalid_ticket' });
     }
 
@@ -125,11 +129,13 @@ function handleScanRequest(e) {
     try {
       lock.waitLock(10000);
     } catch (error) {
+      logDiagnostic('warn', 'scan_rejected', 'server_busy', data, participant);
       return createResponse({ result: 'error', code: 'server_busy' });
     }
 
     try {
       if (scanExists(rawScanSheet, participant.id, data.uuid)) {
+        logDiagnostic('log', 'scan_duplicate', 'success', data, participant);
         return createResponse({ result: 'success', duplicate: true });
       }
 
@@ -150,8 +156,44 @@ function handleScanRequest(e) {
   } catch (error) {
     // Keep diagnostic details in the Apps Script execution log only. Public
     // responses must not expose sheet names, rows, tokens, or stack traces.
-    console.error('Scan receiver error: ' + String(error));
+    logDiagnostic('error', 'scan_error', 'server_error', data, null, String(error));
     return createResponse({ result: 'error', code: 'server_error' });
+  }
+}
+
+/**
+ * Structured Executions logging for every scan outcome. Only non-sensitive
+ * protocol fields are ever included: participant ID, UUID, campus, and the
+ * outcome code/event. Never pass the token, its hash, a Scanner_URL, or any
+ * registration PII into this function.
+ */
+function logDiagnostic(level, event, code, data, participant, message) {
+  const payload = {
+    event: event,
+    code: code
+  };
+
+  const participantId = (participant && participant.id) || (data && data.participant_id);
+  if (typeof participantId !== 'undefined') {
+    payload.participantId = participantId;
+  }
+  if (data && typeof data.uuid !== 'undefined') {
+    payload.uuid = data.uuid;
+  }
+  if (data && typeof data.campus === 'string' && data.campus !== '') {
+    payload.campus = data.campus;
+  }
+  if (typeof message === 'string') {
+    payload.message = message;
+  }
+
+  const line = JSON.stringify(payload);
+  if (level === 'error') {
+    console.error(line);
+  } else if (level === 'warn') {
+    console.warn(line);
+  } else {
+    console.log(line);
   }
 }
 
