@@ -504,9 +504,15 @@
             transition: transform 0.1s ease;
         }
 
-        /* The Campus Intent Capture prompt text is the persistent indicator
-           of which campus is selected; a solid fill only appears for the
-           instant a button is pressed, matching the approved design mock. */
+        /* A selected campus stays filled in until the visitor's QR code is
+           scanned (or a duplicate/failed scan resets it), so staff can see
+           at a glance that a campus was chosen before scanning. */
+        .campus-btn.selected {
+            background: var(--burnt);
+            color: white;
+            border-color: var(--crimson);
+        }
+
         .campus-btn:active {
             background: var(--burnt);
             transform: scale(0.97);
