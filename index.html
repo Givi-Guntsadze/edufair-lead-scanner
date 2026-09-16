@@ -1238,14 +1238,23 @@
 
         // --- SYNC LOGIC ---
         //
-        // Pending scans are sent in micro-batches of up to SYNC_BATCH_SIZE
-        // per HTTP request instead of one request per scan, so a volunteer
-        // scanning several visitors back-to-back does not queue up one
-        // round trip per visitor. Each request carries a bounded, finite
-        // timeout (SYNC_REQUEST_TIMEOUT_MS) via AbortController so a single
-        // slow or hung request can never block the sync loop indefinitely —
-        // a timeout is treated exactly like a network failure: the affected
-        // scans stay pending and are retried on the next tick.
+        // SYNC_BATCH_SIZE bounds one HTTP request, never the queue itself:
+        // sync() loops, draining one batch after another with no wait and no
+        // volunteer action in between, until either the pending queue is
+        // empty or a batch comes back with a transient outcome (network
+        // failure, timeout, or a server_busy/server_error result for one of
+        // its scans). At that point the drain stops early — everything
+        // still pending is left exactly as-is and is retried automatically
+        // by the next tick or the next triggered sync, never lost and never
+        // requiring the volunteer to do anything but keep scanning. Each
+        // request carries a bounded, finite timeout (SYNC_REQUEST_TIMEOUT_MS)
+        // via AbortController so a single slow or hung request can never
+        // block the drain indefinitely — a timeout is treated exactly like a
+        // network failure: the affected scans stay pending.
+        //
+        // A scan is only ever marked synced/rejected after its own
+        // individual server result is known; being included in a request
+        // body never by itself changes its status.
         function markBatchPending(batch, transientCode) {
             for (const scan of batch) {
                 markScanStatus(scan.id, 'pending', transientCode);
@@ -1253,98 +1262,115 @@
             }
         }
 
+        // Sends exactly one batch and applies each scan's individual
+        // result. Returns true if any scan in the batch ended up
+        // transiently pending, which tells the caller it is not safe to
+        // immediately send another batch.
+        async function sendBatch(batch) {
+            const payload = JSON.stringify({
+                scans: batch.map(scan => ({
+                    client_id: scan.id,
+                    participant_id: scan.participantId,
+                    token: scan.token,
+                    uuid: scan.uuid,
+                    timestamp: scan.timestamp,
+                    campus: scan.campus || ''
+                }))
+            });
+
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), SYNC_REQUEST_TIMEOUT_MS);
+
+            let response;
+            try {
+                response = await fetch(API_URL, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: payload,
+                    credentials: 'omit',
+                    redirect: 'follow',
+                    referrerPolicy: 'no-referrer',
+                    signal: controller.signal
+                });
+            } catch (error) {
+                // Do not log the Error object: network libraries can
+                // include the credential-bearing request body in it.
+                // This also covers an AbortController timeout, which
+                // must never be treated as a permanent rejection.
+                console.error('Scan synchronization failed');
+                markBatchPending(batch, 'network');
+                return true;
+            } finally {
+                clearTimeout(timeoutId);
+            }
+
+            if (!response.ok) {
+                markBatchPending(batch, 'network');
+                return true;
+            }
+
+            const body = await response.json().catch(() => null);
+            const resultsByClientId = new Map();
+            if (body && Array.isArray(body.results)) {
+                for (const item of body.results) {
+                    if (item && typeof item.client_id === 'string') {
+                        resultsByClientId.set(item.client_id, item);
+                    }
+                }
+            }
+
+            let hadTransient = false;
+
+            for (const scan of batch) {
+                const result = resultsByClientId.get(scan.id);
+                if (!result) {
+                    // No matching result for this scan: treat as a
+                    // transient server issue rather than guessing.
+                    markScanStatus(scan.id, 'pending', 'server_error');
+                    updateScanItemUI(scan.id, 'pending');
+                    hadTransient = true;
+                    continue;
+                }
+
+                if (result.result === 'success') {
+                    markScanStatus(scan.id, 'synced');
+                    updateScanItemUI(scan.id, 'synced');
+                    continue;
+                }
+
+                if (PERMANENT_ERROR_CODES.has(result.code)) {
+                    markScanStatus(scan.id, 'rejected', result.code);
+                    updateScanItemUI(scan.id, 'rejected');
+                    continue;
+                }
+
+                // Busy, malformed, and internal-error responses are
+                // transient. Leave this scan pending for a later retry.
+                const transientCode = result.code === 'server_busy' ? 'server_busy' : 'server_error';
+                markScanStatus(scan.id, 'pending', transientCode);
+                updateScanItemUI(scan.id, 'pending');
+                hadTransient = true;
+            }
+
+            return hadTransient;
+        }
+
         async function sync() {
             if (isSyncing || !isOnline) return;
-
-            const pending = scanQueue.filter(s => s.status === 'pending');
-            if (pending.length === 0) return;
+            if (getPendingCount() === 0) return;
 
             isSyncing = true;
             updateUI();
 
             try {
-                const batch = pending.slice(0, SYNC_BATCH_SIZE);
-                const payload = JSON.stringify({
-                    scans: batch.map(scan => ({
-                        client_id: scan.id,
-                        participant_id: scan.participantId,
-                        token: scan.token,
-                        uuid: scan.uuid,
-                        timestamp: scan.timestamp,
-                        campus: scan.campus || ''
-                    }))
-                });
+                while (isOnline) {
+                    const batch = scanQueue.filter(s => s.status === 'pending').slice(0, SYNC_BATCH_SIZE);
+                    if (batch.length === 0) break;
 
-                const controller = new AbortController();
-                const timeoutId = setTimeout(() => controller.abort(), SYNC_REQUEST_TIMEOUT_MS);
-
-                let response;
-                try {
-                    response = await fetch(API_URL, {
-                        method: 'POST',
-                        headers: {
-                            'Content-Type': 'application/json'
-                        },
-                        body: payload,
-                        credentials: 'omit',
-                        redirect: 'follow',
-                        referrerPolicy: 'no-referrer',
-                        signal: controller.signal
-                    });
-                } catch (error) {
-                    // Do not log the Error object: network libraries can
-                    // include the credential-bearing request body in it.
-                    // This also covers an AbortController timeout, which
-                    // must never be treated as a permanent rejection.
-                    console.error('Scan synchronization failed');
-                    markBatchPending(batch, 'network');
-                    return;
-                } finally {
-                    clearTimeout(timeoutId);
-                }
-
-                if (!response.ok) {
-                    markBatchPending(batch, 'network');
-                    return;
-                }
-
-                const body = await response.json().catch(() => null);
-                const resultsByClientId = new Map();
-                if (body && Array.isArray(body.results)) {
-                    for (const item of body.results) {
-                        if (item && typeof item.client_id === 'string') {
-                            resultsByClientId.set(item.client_id, item);
-                        }
-                    }
-                }
-
-                for (const scan of batch) {
-                    const result = resultsByClientId.get(scan.id);
-                    if (!result) {
-                        // No matching result for this scan: treat as a
-                        // transient server issue rather than guessing.
-                        markScanStatus(scan.id, 'pending', 'server_error');
-                        updateScanItemUI(scan.id, 'pending');
-                        continue;
-                    }
-
-                    if (result.result === 'success') {
-                        markScanStatus(scan.id, 'synced');
-                        updateScanItemUI(scan.id, 'synced');
-                        continue;
-                    }
-
-                    if (PERMANENT_ERROR_CODES.has(result.code)) {
-                        markScanStatus(scan.id, 'rejected', result.code);
-                        updateScanItemUI(scan.id, 'rejected');
-                        continue;
-                    }
-
-                    // Busy, malformed, and internal-error responses are
-                    // transient. Leave this scan pending for a later retry.
-                    const transientCode = result.code === 'server_busy' ? 'server_busy' : 'server_error';
-                    markScanStatus(scan.id, 'pending', transientCode);
-                    updateScanItemUI(scan.id, 'pending');
+                    const hadTransient = await sendBatch(batch);
+                    if (hadTransient) break;
                 }
             } finally {
                 isSyncing = false;
@@ -1352,8 +1378,10 @@
             }
         }
 
-        // Auto-retry sync every 5 seconds. A backlog larger than one batch
-        // drains over successive ticks rather than all at once.
+        // Auto-retry every 5 seconds in case a previous drain stopped early
+        // on a transient failure (network issue, timeout, server_busy).
+        // While online with no transient failures, sync() itself already
+        // drains the entire queue across as many batches as it takes.
         setInterval(() => {
             if (isOnline && getPendingCount() > 0) {
                 sync();

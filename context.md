@@ -62,6 +62,19 @@ UUID/campus validation, and the `Raw_Scans` schema are all unchanged. See
 `README.md` section 9 for the full design and `TESTING.md` for the
 deployment and verification steps.
 
+The batching design was subsequently tightened so the 10-scan batch size is
+purely a transport limit, never a cap on how many scans can be queued or
+eventually accepted. `sync()` now loops, sending consecutive 10-scan
+requests back-to-back with no wait and no volunteer action in between, until
+the entire pending queue is drained (12 scans send as 10 then 2, 100 as ten
+requests of 10, and so on) or a batch comes back with any transient outcome,
+at which point the drain stops early and whatever is left pending is picked
+up automatically on the next retry tick — never lost, only delayed.
+`Code.gs` now rejects (rather than silently truncates) a single request that
+somehow arrives with more than 10 scans, since the official frontend never
+sends one and a truncation would otherwise drop scans with no result
+returned for them at all.
+
 Outside of that pending feature, the public scanner workflow is unchanged.
 `Code.gs`, `ParticipantLinks.gs`, and `index.html` do not need redeployment
 for the `Which Fair` reporting-only change described below.

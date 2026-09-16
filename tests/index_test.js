@@ -166,6 +166,13 @@ function createHarness({
         return { ok: false, async json() { return null; } };
       }
 
+      if (queued.omit) {
+        // Simulates a malformed/buggy server response that is missing this
+        // particular scan's result entirely, to verify the client never
+        // treats "no result" as an implicit success or silently drops it.
+        continue;
+      }
+
       const payload = queued.body ?? queued;
       results.push(Object.assign({ client_id: scan.client_id }, payload));
     }
@@ -547,33 +554,208 @@ test('6 rapid scans from one institution sync in a single batched request', asyn
   assert.ok(harness.queue().every(scan => scan.status === 'synced'), 'every scan in the batch resolves independently to synced');
 });
 
-test('a backlog larger than the batch size drains over successive sync calls', async () => {
-  // Queued while offline for the same reason as above: this isolates the
-  // batch-size cap from the "sync immediately after capture" race.
+test('1 pending scan syncs as a single request', async () => {
+  const harness = createHarness({ online: false });
+  harness.context.onScanSuccess('AAAA1111');
+  harness.goOnline();
+  await harness.flushPromises();
+
+  assert.equal(harness.fetchCalls.length, 1);
+  assert.equal(JSON.parse(harness.fetchCalls[0].options.body).scans.length, 1);
+  assert.equal(harness.queue()[0].status, 'synced');
+});
+
+test('10 pending scans sync in exactly one batch', async () => {
+  const harness = createHarness({ online: false });
+  const uuids = [];
+  for (let i = 0; i < 10; i += 1) {
+    uuids.push('TENN' + String(i).padStart(4, '0'));
+  }
+  for (const uuid of uuids) harness.context.onScanSuccess(uuid);
+
+  harness.goOnline();
+  await harness.flushPromises();
+
+  assert.equal(harness.fetchCalls.length, 1, '10 pending scans still fit in exactly one batch');
+  assert.equal(JSON.parse(harness.fetchCalls[0].options.body).scans.length, 10);
+  assert.ok(harness.queue().every(scan => scan.status === 'synced'));
+});
+
+test('12 pending scans automatically drain as batches of 10 then 2, with no volunteer action between them', async () => {
+  // SYNC_BATCH_SIZE bounds one request only, never the queue itself: a
+  // single goOnline() (one trigger, no manual Sync Now click, no extra
+  // sync() call) must be enough to drain the entire backlog across as
+  // many batches as it takes.
   const harness = createHarness({ online: false });
   const uuids = [];
   for (let i = 0; i < 12; i += 1) {
     uuids.push('BULK' + String(i).padStart(4, '0'));
   }
-  for (const uuid of uuids) {
-    harness.context.onScanSuccess(uuid);
-  }
+  for (const uuid of uuids) harness.context.onScanSuccess(uuid);
   assert.equal(harness.queue().length, 12);
 
   harness.goOnline();
   await harness.flushPromises();
 
-  while (harness.queue().some(scan => scan.status === 'pending')) {
-    await harness.context.sync();
-    await harness.flushPromises();
-  }
+  assert.equal(harness.fetchCalls.length, 2, 'a 12-item backlog automatically drains as exactly two requests');
+  assert.equal(JSON.parse(harness.fetchCalls[0].options.body).scans.length, 10);
+  assert.equal(JSON.parse(harness.fetchCalls[1].options.body).scans.length, 2);
+  assert.ok(harness.queue().every(scan => scan.status === 'synced'), 'every one of the 12 scans is eventually synced, none dropped');
+});
 
-  assert.ok(harness.queue().every(scan => scan.status === 'synced'));
-  assert.ok(harness.fetchCalls.length >= 2, 'a 12-item backlog needs more than one batch to fully drain');
-  for (const call of harness.fetchCalls) {
-    const body = JSON.parse(call.options.body);
-    assert.ok(body.scans.length <= 10, 'no single request ever exceeds the batch size cap');
+test('23 pending scans automatically drain as batches of 10, 10, then 3', async () => {
+  const harness = createHarness({ online: false });
+  const uuids = [];
+  for (let i = 0; i < 23; i += 1) {
+    uuids.push('BIGQ' + String(i).padStart(4, '0'));
   }
+  for (const uuid of uuids) harness.context.onScanSuccess(uuid);
+
+  harness.goOnline();
+  await harness.flushPromises();
+
+  assert.equal(harness.fetchCalls.length, 3);
+  assert.deepEqual(
+    harness.fetchCalls.map(call => JSON.parse(call.options.body).scans.length),
+    [10, 10, 3]
+  );
+  assert.ok(harness.queue().every(scan => scan.status === 'synced'));
+});
+
+test('100 queued scans eventually drain without any scan lost, duplicated, or requiring volunteer interaction', async () => {
+  const harness = createHarness({ online: false });
+  const uuids = [];
+  for (let i = 0; i < 100; i += 1) {
+    uuids.push('HVOL' + String(i).padStart(4, '0'));
+  }
+  for (const uuid of uuids) harness.context.onScanSuccess(uuid);
+  assert.equal(harness.queue().length, 100);
+
+  // A single reconnect event is the only trigger; no manual Sync Now click
+  // and no additional sync() call are made anywhere in this test.
+  harness.goOnline();
+  await harness.flushPromises();
+
+  const queue = harness.queue();
+  assert.equal(queue.length, 100, 'no scan is lost or duplicated in local storage');
+  assert.ok(queue.every(scan => scan.status === 'synced'), 'every one of the 100 scans is eventually synced');
+  assert.deepEqual(queue.map(scan => scan.uuid), uuids, 'queue order and identity are preserved');
+
+  assert.equal(harness.fetchCalls.length, 10, '100 scans drain as ten batches of 10, all sent automatically');
+  const sentUuids = harness.fetchCalls.flatMap(call => JSON.parse(call.options.body).scans.map(scan => scan.uuid));
+  assert.deepEqual(sentUuids, uuids, 'every scan is sent exactly once, in order, across the automatic drain');
+});
+
+test('a transient failure partway through a drain stops that cycle; the rest of the queue is left pending for automatic retry', async () => {
+  // Batch 1 (scans 0-9) succeeds. Batch 2 (scans 10-19) fails with a
+  // whole-request network error. Per the required behavior, continuing to
+  // send batch 3 (scans 20-24) immediately afterward would be unsafe, so
+  // the drain must stop there — batch 3 is never attempted in this cycle,
+  // and everything from batch 2 onward stays pending, to be retried
+  // automatically later (the 5-second interval, or the next triggered
+  // sync), not lost.
+  const fetchResponses = [];
+  for (let i = 0; i < 10; i += 1) fetchResponses.push({ result: 'success', duplicate: false });
+  const harness = createHarness({ online: false, fetchResponses });
+
+  const uuids = [];
+  for (let i = 0; i < 25; i += 1) {
+    uuids.push('DRNS' + String(i).padStart(4, '0'));
+  }
+  for (const uuid of uuids) harness.context.onScanSuccess(uuid);
+
+  // Force the second batch's request to fail outright (simulating a
+  // dropped connection), leaving the fake with no more queued responses
+  // for anything after it.
+  harness.fetchCalls.length = 0;
+  const originalFetch = harness.context.fetch;
+  let callCount = 0;
+  harness.context.fetch = async (url, options) => {
+    callCount += 1;
+    if (callCount === 2) {
+      throw new Error('simulated dropped connection');
+    }
+    return originalFetch(url, options);
+  };
+
+  harness.goOnline();
+  await harness.flushPromises();
+
+  assert.equal(callCount, 2, 'the drain stops after the transient failure; batch 3 is never sent in this cycle');
+
+  const queue = harness.queue();
+  assert.equal(queue.length, 25, 'no scan is lost');
+  for (let i = 0; i < 10; i += 1) {
+    assert.equal(queue[i].status, 'synced', `scan ${i} from the successful first batch is synced`);
+  }
+  for (let i = 10; i < 25; i += 1) {
+    assert.equal(queue[i].status, 'pending', `scan ${i} stays pending after the drain stops`);
+  }
+  assert.equal(queue[10].transientCode, 'network');
+});
+
+test('a scan missing from the server response stays pending, never marked synced or silently removed', async () => {
+  const harness = createHarness({
+    online: false,
+    fetchResponses: [
+      { result: 'success', duplicate: false },
+      { omit: true },
+      { result: 'success', duplicate: false }
+    ]
+  });
+  harness.context.onScanSuccess('AAAA1111');
+  harness.context.onScanSuccess('BBBB2222');
+  harness.context.onScanSuccess('CCCC3333');
+
+  harness.goOnline();
+  await harness.flushPromises();
+
+  const queue = harness.queue();
+  assert.equal(queue.length, 3, 'no queue item is ever removed');
+  assert.equal(queue[0].status, 'synced');
+  assert.equal(queue[1].status, 'pending', 'a scan with no matching result is left pending, not silently dropped or marked synced');
+  assert.equal(queue[1].transientCode, 'server_error');
+  assert.equal(queue[2].status, 'synced');
+});
+
+test('a browser reload preserves a large pending queue exactly, with no scan lost or duplicated', () => {
+  const sharedStorage = new Map();
+  const harness1 = createHarness({ online: false, storage: sharedStorage });
+  const uuids = [];
+  for (let i = 0; i < 15; i += 1) {
+    const uuid = 'RELD' + String(i).padStart(4, '0');
+    uuids.push(uuid);
+    harness1.context.onScanSuccess(uuid);
+  }
+  assert.equal(harness1.queue().length, 15);
+
+  // Simulate a page reload: a fresh script context reading the same
+  // underlying localStorage the first context wrote to, rather than the
+  // initialQueue test-seeding helper.
+  const harness2 = createHarness({ online: false, storage: sharedStorage });
+  const reloaded = harness2.queue();
+
+  assert.equal(reloaded.length, 15, 'no scan is lost or duplicated across a reload');
+  assert.deepEqual(reloaded.map(scan => scan.uuid), uuids);
+  assert.ok(reloaded.every(scan => scan.status === 'pending'), 'every scan is still pending after reload, exactly as before');
+});
+
+test('the same UUID scanned by two different institutions each syncs independently as valid', async () => {
+  const harnessA = createHarness({ search: '?uni=constructor', online: false });
+  const harnessB = createHarness({ search: '?uni=anotheruni', online: false });
+
+  harnessA.context.onScanSuccess('SHARE001');
+  harnessB.context.onScanSuccess('SHARE001');
+
+  harnessA.goOnline();
+  harnessB.goOnline();
+  await harnessA.flushPromises();
+  await harnessB.flushPromises();
+
+  assert.equal(harnessA.queue()[0].status, 'synced');
+  assert.equal(harnessB.queue()[0].status, 'synced');
+  assert.equal(JSON.parse(harnessA.fetchCalls[0].options.body).scans[0].participant_id, 'constructor');
+  assert.equal(JSON.parse(harnessB.fetchCalls[0].options.body).scans[0].participant_id, 'anotheruni');
 });
 
 test('a mixed batch resolves every scan to its own independent outcome', async () => {

@@ -58,10 +58,13 @@ const SPREADSHEET_ID_PATTERN = /^[A-Za-z0-9_-]{20,}$/;
 
 // --- High-volume synchronization tuning ---
 //
-// One HTTP request now carries up to this many queued scans. 10 comfortably
-// covers "one volunteer scans 5-6 visitors back-to-back" with headroom, while
-// keeping the JSON payload and the per-request validation loop small enough
-// that a single slow request never represents an unbounded amount of work.
+// A transport limit only: the most scans one HTTP request may carry, not a
+// cap on how many scans a device can queue or eventually get accepted. The
+// frontend chunks any backlog into consecutive requests of at most this
+// size until it is drained. 10 comfortably covers "one volunteer scans 5-6
+// visitors back-to-back" with headroom, while keeping the JSON payload and
+// the per-request validation loop small enough that a single slow request
+// never represents an unbounded amount of work.
 const MAX_BATCH_SIZE = 10;
 
 // The lock now protects only the final write phase (recheck + append), not
@@ -130,7 +133,21 @@ function doPost(e) {
 function handleScanRequest(e) {
   const batchInput = parseBatchInput(e);
   if (batchInput) {
-    const batchResults = processScanBatch(batchInput.scans.slice(0, MAX_BATCH_SIZE));
+    if (batchInput.scans.length > MAX_BATCH_SIZE) {
+      // MAX_BATCH_SIZE is a transport limit the official frontend enforces
+      // by chunking locally; it never sends an oversized request. A batch
+      // over this size can only come from a non-conforming client, so it is
+      // rejected outright (every submitted scan reported back as
+      // invalid_request) rather than silently truncated, which would
+      // otherwise drop the excess scans with no result at all.
+      return createResponse({
+        results: batchInput.scans.map(function (rawScan) {
+          const normalized = normalizeScanInput(rawScan);
+          return errorResult(normalized.clientId, 'invalid_request');
+        })
+      });
+    }
+    const batchResults = processScanBatch(batchInput.scans);
     return createResponse({ results: batchResults });
   }
 

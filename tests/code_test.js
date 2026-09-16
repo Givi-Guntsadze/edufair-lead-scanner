@@ -777,9 +777,13 @@ for (const value of [
 }
 
 {
-  // A batch larger than MAX_BATCH_SIZE (10) is truncated server-side as a
-  // defensive cap; the frontend never sends more than 10 per request, but
-  // the backend does not trust that blindly.
+  // MAX_BATCH_SIZE (10) is a transport limit, not a cap on how many scans
+  // can ever be accepted: the frontend never sends more than 10 per
+  // request, chunking any larger backlog across consecutive requests
+  // instead. A single request that still arrives oversized (only possible
+  // from a non-conforming client) is rejected outright rather than
+  // silently truncated, so none of its scans are ever dropped with no
+  // result at all — and it must not write anything.
   const sheets = defaultSheets();
   const uuids = [];
   for (let i = 0; i < 12; i += 1) {
@@ -787,9 +791,15 @@ for (const value of [
     uuids.push(uuid);
     sheets.valid_tickets.push([uuid]);
   }
-  const { context } = createEnvironment(sheets);
+  const { context, spreadsheet } = createEnvironment(sheets);
+  const rawScans = spreadsheet.getSheetByName('Raw_Scans');
   const batch = postBatch(context, uuids.map(uuid => ({ uuid })));
-  assert.equal(batch.results.length, 10, 'only the first MAX_BATCH_SIZE items are processed');
+  assert.equal(batch.results.length, 12, 'every submitted scan gets its own result, none silently dropped');
+  for (const scan of batch.scans) {
+    const result = resultFor(batch, scan.client_id);
+    assert.deepEqual(result, { client_id: scan.client_id, result: 'error', code: 'invalid_request' });
+  }
+  assert.equal(rawScans.getLastRow(), 1, 'an oversized request writes nothing');
 }
 
 {

@@ -291,8 +291,32 @@ same visitor legitimately being scanned by multiple institutions.
 participant ID, bearer credential, UUID, campus, and timestamp; a batch never
 mixes them up. Every scan gets its own outcome back from the server (matched
 by a client-generated `client_id`, not by array position), so one rejected or
-still-pending scan in a batch never affects the others. A backlog larger than
-10 drains across successive sync ticks rather than in one request.
+still-pending scan in a batch never affects the others.
+
+**10 is a transport limit only, never a limit on how many scans can be
+queued or eventually accepted.** A scan is written to `localStorage`
+immediately on capture and stays there, unconditionally, until its own
+individual server result comes back as synced or a permanent rejection —
+nothing is ever removed just for having been included in a request. Every
+`sync()` call drains the *entire* pending queue automatically, one 10-scan
+request after another, back-to-back with no wait and no volunteer action in
+between: 12 pending scans send as 10 then 2, 23 as 10, 10, then 3, and so on
+however large the backlog gets. A volunteer's only job is to keep scanning —
+nothing needs to be clicked or retried to "continue" a large batch, and
+nothing is ever dropped just because more than 10 scans piled up.
+
+The one thing that legitimately stops an in-progress drain is a transient
+outcome — a network failure, a request timeout, or a `server_busy`/
+`server_error` result for any scan in the current batch. Sending another
+batch immediately afterward would not be safe, so the drain stops there:
+everything not yet resolved is left exactly as pending, and picked up again
+automatically by the 5-second retry interval or the next triggered sync — no
+scan is ever lost, only delayed. `Code.gs` mirrors this on the way in: the
+official frontend never sends more than 10 scans per request (it chunks
+locally), but if a request somehow arrives oversized anyway, the backend
+rejects that malformed request outright (one `invalid_request` result per
+submitted scan) rather than silently truncating it, which would otherwise
+drop the excess scans with no result at all.
 
 `Code.gs` also still accepts the original single-scan
 `application/x-www-form-urlencoded` request and answers with the original

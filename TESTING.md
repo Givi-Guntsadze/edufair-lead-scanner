@@ -22,7 +22,7 @@ Expected results:
 
 - `Code.gs authorization tests passed`
 - `Participant link generation tests passed`
-- forty-five passing frontend subtests
+- fifty-three passing frontend subtests
 - four passing confirmation-email escaping subtests
 - `Campus configuration parity tests passed`
 - Python compilation exits with code 0
@@ -32,9 +32,16 @@ Expected results:
 The suites cover token and UUID validation, inactive links, participant-ID
 substitution, duplicate idempotency, formula injection, safe DOM rendering,
 POST-body synchronization, offline persistence, rejected scans, transient
-retry behavior, request-timeout handling, micro-batching, and the
+retry behavior, request-timeout handling, the
 valid-ticket/participant/duplicate caches (including their miss and
-revocation/rotation behavior).
+revocation/rotation behavior), and unbounded-queue micro-batching: 10 is a
+transport limit only, never a cap on how many scans can be queued or
+accepted, so a `sync()` call automatically drains a backlog of any size
+(explicitly verified at 12, 23, and 100 queued scans) across as many
+back-to-back batches as it takes, stopping early only on a transient failure
+(so nothing already in flight is lost), with no volunteer action required
+between batches, an oversized request rejected rather than silently
+truncated, and a browser reload never losing or duplicating a queued scan.
 
 ## Apps Script Pre-deployment Check
 
@@ -278,3 +285,4 @@ present, which is enough to diagnose a symptom without exposing a credential.
 | Old link still works after rotation | Confirm the latest Apps Script version is deployed and the old hash was replaced. This can also be the participant-auth cache: a rotated or just-revoked (`Active` -> `FALSE`) link can keep working for up to 60 seconds after the sheet change, by design — wait a minute and retry before concluding the deployment is stale. |
 | A newly registered visitor's QR is rejected right after registration | Confirm the UUID actually reached `valid_tickets` (n8n write order). It is not a caching delay — a UUID not yet seen by this Apps Script instance always falls back to a live sheet read, so it is usable on the very first scan attempt once it is actually in the sheet. |
 | Many volunteers scanning at once, occasional `server_busy` | Expected under load: the lock wait is now ~2 seconds by design (see README section 9), not 10. Affected scans retry automatically within seconds; this is not a stuck/broken deployment. |
+| A device has a large pending count (dozens+) after a scanning burst | Expected, not stuck. 10 is a per-request transport limit, not a queue cap: `sync()` automatically drains the whole backlog as consecutive 10-scan requests with no volunteer action needed, stopping early only if a batch comes back transient (network/timeout/`server_busy`/`server_error`), in which case the rest is retried automatically on the next 5-second tick. Confirm the count is decreasing, not stuck at the same number. |
