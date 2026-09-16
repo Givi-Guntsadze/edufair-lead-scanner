@@ -7,6 +7,9 @@ const VALID_TOKEN = 'a'.repeat(64);
 const UNKNOWN_TOKEN = 'c'.repeat(64);
 const INACTIVE_TOKEN = 'b'.repeat(64);
 const CONFIGURED_TOKEN = 'd'.repeat(64);
+const INTO_TOKEN = '1'.repeat(64);
+const GEDU_TOKEN = '2'.repeat(64);
+const BURGSB_TOKEN = '3'.repeat(64);
 const SCAN_SPREADSHEET_ID = '1FairScanWorkbookIdForAuthorizationTests';
 
 function sha256(value) {
@@ -148,6 +151,27 @@ function defaultSheets() {
         sha256(CONFIGURED_TOKEN),
         true,
         `https://scanner.example/?uni=ieu#token=${CONFIGURED_TOKEN}`
+      ],
+      [
+        'INTO',
+        'into',
+        sha256(INTO_TOKEN),
+        true,
+        `https://scanner.example/?uni=into#token=${INTO_TOKEN}`
+      ],
+      [
+        'GEDU',
+        'gedu',
+        sha256(GEDU_TOKEN),
+        true,
+        `https://scanner.example/?uni=gedu#token=${GEDU_TOKEN}`
+      ],
+      [
+        'Burgundy School of Business',
+        'burgsb',
+        sha256(BURGSB_TOKEN),
+        true,
+        `https://scanner.example/?uni=burgsb#token=${BURGSB_TOKEN}`
       ]
     ],
     valid_tickets: [
@@ -155,7 +179,10 @@ function defaultSheets() {
       ['A1B2C3D4'],
       ['12345678'],
       ['CAMP0001'],
-      ['CAMP0002']
+      ['CAMP0002'],
+      ['CAMP0003'],
+      ['CAMP0004'],
+      ['CAMP0005']
     ]
   };
 }
@@ -372,6 +399,30 @@ for (const [label, request, expectedCode] of [
     { result: 'success', duplicate: false }
   );
   assert.equal(rawScans.rows[1][3], '');
+}
+
+for (const [participantId, token, uuid, validCampus, invalidCampus] of [
+  ['into', INTO_TOKEN, 'CAMP0003', 'UAE', 'Germany'],
+  ['gedu', GEDU_TOKEN, 'CAMP0004', 'Malta', 'Nicosia'],
+  ['burgsb', BURGSB_TOKEN, 'CAMP0005', 'Lyon', 'Madrid']
+]) {
+  const { context, spreadsheet } = createEnvironment();
+  const rawScans = spreadsheet.getSheetByName('Raw_Scans');
+
+  assert.deepEqual(
+    postRequest(context, { participantId, token, uuid, campus: validCampus }),
+    { result: 'success', duplicate: false },
+    `${participantId} must accept its configured campus "${validCampus}"`
+  );
+  assert.equal(rawScans.rows[1][3], validCampus);
+
+  const rejection = postRequest(context, { participantId, token, uuid, campus: invalidCampus });
+  assert.deepEqual(
+    rejection,
+    { result: 'error', code: 'invalid_campus' },
+    `${participantId} must reject a campus outside its allowlist ("${invalidCampus}")`
+  );
+  assert.equal(rawScans.getLastRow(), 2, `${participantId} rejected campus must not append a row`);
 }
 
 for (const [label, campus] of [

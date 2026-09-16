@@ -401,6 +401,22 @@ test('configured participant sees a campus selector with every configured option
   assert.equal(optionButtons[optionButtons.length - 1].textContent, 'Undecided');
 });
 
+for (const [participantId, expectedOptions] of [
+  ['into', ['US', 'UK', 'Australia', 'Spain', 'UAE', 'Undecided']],
+  ['gedu', ['US', 'UK', 'Ireland', 'UAE', 'Australia', 'Germany', 'Malta', 'France', 'Spain', 'Undecided']],
+  ['burgsb', ['Dijon', 'Lyon', 'Undecided']]
+]) {
+  test(`newly configured participant ${participantId} sees exactly its expected campus options`, () => {
+    const harness = createHarness({ search: `?uni=${participantId}`, online: true });
+    const selector = harness.elements.get('campus-selector');
+    assert.equal(selector.hidden, false);
+
+    const optionButtons = harness.elements.get('campus-options').children;
+    assert.deepEqual(optionButtons.map(button => button.textContent), expectedOptions);
+    assert.equal(optionButtons[optionButtons.length - 1].textContent, 'Undecided');
+  });
+}
+
 test('configured institution cannot create a new queue item without a campus selection', () => {
   const harness = createHarness({ search: CONFIGURED_SEARCH, online: false });
   harness.context.onScanSuccess('A1B2C3D4');
