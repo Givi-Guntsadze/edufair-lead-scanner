@@ -191,13 +191,16 @@ function createEnvironment(
   sheetDefinitions = defaultSheets(),
   {
     activeSpreadsheetAvailable = true,
-    configuredSpreadsheetId = SCAN_SPREADSHEET_ID
+    configuredSpreadsheetId = SCAN_SPREADSHEET_ID,
+    lockContended = false
   } = {}
 ) {
   const spreadsheet = new FakeSpreadsheet(sheetDefinitions);
   let lockReleases = 0;
   const lockEvents = [];
   const loggedErrors = [];
+  const loggedWarnings = [];
+  const loggedInfo = [];
   const openedSpreadsheetIds = [];
   const scriptProperties = new Map();
   if (configuredSpreadsheetId) {
@@ -206,7 +209,8 @@ function createEnvironment(
   const context = {
     console: {
       error(message) { loggedErrors.push(String(message)); },
-      log() {}
+      warn(message) { loggedWarnings.push(String(message)); },
+      log(message) { loggedInfo.push(String(message)); }
     },
     ContentService: {
       MimeType: { JSON: 'json' },
@@ -220,7 +224,11 @@ function createEnvironment(
     LockService: {
       getScriptLock() {
         return {
-          waitLock() {},
+          waitLock() {
+            if (lockContended) {
+              throw new Error('Could not obtain lock');
+            }
+          },
           releaseLock() {
             lockReleases += 1;
             lockEvents.push('release');
@@ -264,6 +272,8 @@ function createEnvironment(
     context,
     spreadsheet,
     loggedErrors,
+    loggedWarnings,
+    loggedInfo,
     openedSpreadsheetIds,
     scriptProperties,
     lockReleases: () => lockReleases,
@@ -296,7 +306,7 @@ function postRequest(context, {
 }
 
 {
-  const { context, spreadsheet, lockReleases, lockEvents } = createEnvironment();
+  const { context, spreadsheet, lockReleases, lockEvents, loggedInfo } = createEnvironment();
   const rawScans = spreadsheet.getSheetByName('Raw_Scans');
 
   assert.deepEqual(parseResponse(context.doGet({ parameter: {} })), {
@@ -319,6 +329,7 @@ function postRequest(context, {
     ['flush', 'release'],
     'pending spreadsheet writes must flush before releasing the script lock'
   );
+  assert.equal(loggedInfo.length, 0, 'a first-time accepted scan is not a duplicate event');
 
   assert.deepEqual(postRequest(context), {
     result: 'success',
@@ -327,6 +338,12 @@ function postRequest(context, {
   assert.equal(rawScans.getLastRow(), 2, 'duplicate scans must not append');
   assert.equal(lockReleases(), 2);
   assert.deepEqual(lockEvents(), ['flush', 'release', 'release']);
+  assert.equal(loggedInfo.length, 1, 'a duplicate scan logs one informational event');
+  const duplicateEvent = JSON.parse(loggedInfo[0]);
+  assert.equal(duplicateEvent.event, 'scan_duplicate');
+  assert.equal(duplicateEvent.participantId, 'constructor');
+  assert.equal(duplicateEvent.uuid, 'A1B2C3D4');
+  assert.doesNotMatch(loggedInfo[0], new RegExp(VALID_TOKEN));
 }
 
 for (const [label, request, expectedCode] of [
@@ -345,7 +362,7 @@ for (const [label, request, expectedCode] of [
     'unauthorized'
   ]
 ]) {
-  const { context, spreadsheet } = createEnvironment();
+  const { context, spreadsheet, loggedWarnings, loggedErrors } = createEnvironment();
   const response = postRequest(context, request);
   assert.equal(response.result, 'error', label);
   assert.equal(response.code, expectedCode, label);
@@ -355,16 +372,54 @@ for (const [label, request, expectedCode] of [
     `${label} must not append`
   );
   assert.doesNotMatch(JSON.stringify(response), new RegExp(request.token ?? VALID_TOKEN));
+
+  assert.equal(loggedWarnings.length, 1, `${label} must log exactly one diagnostic warning`);
+  assert.equal(loggedErrors.length, 0, `${label} is an expected rejection, not a server error`);
+  const logged = JSON.parse(loggedWarnings[0]);
+  assert.equal(logged.event, 'scan_rejected', label);
+  assert.equal(logged.code, expectedCode, label);
+  assert.doesNotMatch(loggedWarnings[0], new RegExp(request.token ?? VALID_TOKEN), `${label} must never log the token`);
+  assert.doesNotMatch(loggedWarnings[0], new RegExp(sha256(request.token ?? VALID_TOKEN)), `${label} must never log a token hash`);
 }
 
 {
   const sheets = defaultSheets();
   delete sheets.valid_tickets;
-  const { context, loggedErrors } = createEnvironment(sheets);
+  const { context, loggedErrors, loggedWarnings } = createEnvironment(sheets);
   const response = postRequest(context);
   assert.deepEqual(response, { result: 'error', code: 'server_error' });
   assert.equal(loggedErrors.length, 1);
+  assert.equal(loggedWarnings.length, 0, 'a server exception is not an expected rejection');
   assert.doesNotMatch(JSON.stringify(response), new RegExp(VALID_TOKEN));
+
+  const logged = JSON.parse(loggedErrors[0]);
+  assert.equal(logged.event, 'scan_error');
+  assert.equal(logged.code, 'server_error');
+  assert.equal(logged.participantId, 'constructor');
+  assert.equal(logged.uuid, 'A1B2C3D4');
+  assert.match(logged.message, /Missing required scanner sheet: valid_tickets/);
+  assert.doesNotMatch(loggedErrors[0], new RegExp(VALID_TOKEN), 'server error log must never contain the token');
+}
+
+{
+  // Lock contention is transient and must be diagnosable without ever
+  // logging the credential that authorized the request.
+  const { context, spreadsheet, loggedWarnings, loggedErrors } = createEnvironment(
+    defaultSheets(),
+    { lockContended: true }
+  );
+  const response = postRequest(context);
+  assert.deepEqual(response, { result: 'error', code: 'server_busy' });
+  assert.equal(spreadsheet.getSheetByName('Raw_Scans').getLastRow(), 1);
+  assert.equal(loggedErrors.length, 0, 'lock contention is expected, not a server exception');
+  assert.equal(loggedWarnings.length, 1);
+
+  const logged = JSON.parse(loggedWarnings[0]);
+  assert.equal(logged.event, 'scan_rejected');
+  assert.equal(logged.code, 'server_busy');
+  assert.equal(logged.participantId, 'constructor');
+  assert.equal(logged.uuid, 'A1B2C3D4');
+  assert.doesNotMatch(loggedWarnings[0], new RegExp(VALID_TOKEN));
 }
 
 // --- Campus Intent Capture ---
@@ -406,7 +461,7 @@ for (const [participantId, token, uuid, validCampus, invalidCampus] of [
   ['gedu', GEDU_TOKEN, 'CAMP0004', 'Malta', 'Nicosia'],
   ['burgsb', BURGSB_TOKEN, 'CAMP0005', 'Lyon', 'Madrid']
 ]) {
-  const { context, spreadsheet } = createEnvironment();
+  const { context, spreadsheet, loggedWarnings } = createEnvironment();
   const rawScans = spreadsheet.getSheetByName('Raw_Scans');
 
   assert.deepEqual(
@@ -423,6 +478,14 @@ for (const [participantId, token, uuid, validCampus, invalidCampus] of [
     `${participantId} must reject a campus outside its allowlist ("${invalidCampus}")`
   );
   assert.equal(rawScans.getLastRow(), 2, `${participantId} rejected campus must not append a row`);
+
+  assert.equal(loggedWarnings.length, 1, `${participantId} rejected campus must log one diagnostic`);
+  const logged = JSON.parse(loggedWarnings[0]);
+  assert.equal(logged.code, 'invalid_campus');
+  assert.equal(logged.participantId, participantId);
+  assert.equal(logged.uuid, uuid);
+  assert.equal(logged.campus, invalidCampus, 'the rejected campus value must be diagnosable');
+  assert.doesNotMatch(loggedWarnings[0], new RegExp(token));
 }
 
 for (const [label, campus] of [
@@ -461,7 +524,7 @@ for (const [label, campus] of [
   // Duplicate handling remains idempotent and campus-aware: a repeat scan
   // for the same institution + UUID must not create a second row, even
   // when a (potentially different) campus value is supplied.
-  const { context, spreadsheet } = createEnvironment();
+  const { context, spreadsheet, loggedInfo } = createEnvironment();
   const rawScans = spreadsheet.getSheetByName('Raw_Scans');
 
   postRequest(context, { participantId: 'ieu', token: CONFIGURED_TOKEN, uuid: 'CAMP0001', campus: 'Madrid' });
@@ -474,6 +537,14 @@ for (const [label, campus] of [
   assert.deepEqual(duplicateResponse, { result: 'success', duplicate: true });
   assert.equal(rawScans.getLastRow(), 2, 'duplicate scans must not append a second row');
   assert.equal(rawScans.rows[1][3], 'Madrid', 'the original accepted campus must be unchanged');
+
+  assert.equal(loggedInfo.length, 1, 'only the duplicate attempt logs an informational event');
+  const duplicateEvent = JSON.parse(loggedInfo[0]);
+  assert.equal(duplicateEvent.event, 'scan_duplicate');
+  assert.equal(duplicateEvent.participantId, 'ieu');
+  assert.equal(duplicateEvent.uuid, 'CAMP0001');
+  assert.equal(duplicateEvent.campus, 'Segovia', 'logs the campus submitted with the duplicate attempt');
+  assert.doesNotMatch(loggedInfo[0], new RegExp(CONFIGURED_TOKEN));
 }
 
 {

@@ -22,7 +22,7 @@ Expected results:
 
 - `Code.gs authorization tests passed`
 - `Participant link generation tests passed`
-- twenty-nine passing frontend subtests
+- forty passing frontend subtests
 - four passing confirmation-email escaping subtests
 - `Campus configuration parity tests passed`
 - Python compilation exits with code 0
@@ -206,11 +206,46 @@ without a `Campus` column, exactly as before.
 
 ## Troubleshooting
 
+### Reading a rejection on the scanner itself
+
+Every rejected scan in the Recent Scans list now shows a reason line under
+the UUID, not just a red dot. A pending item that keeps retrying also shows
+why it hasn't gone through yet. These messages come directly from the server
+code the Apps Script backend returned:
+
+| Scanner message | Server code | Meaning |
+| --- | --- | --- |
+| Rejected - institution link unauthorized | `unauthorized` | The token/participant pair doesn't match an active row in `participant_url`. Confirm `Token_Hash`, `Active`, and `Scanner_URL` are from the same participant row, and that the Apps Script deployment running is the current campus-aware version (see "Valid QR is rejected" below). |
+| Rejected - invalid scan request | `invalid_request` | The participant ID, token, UUID, or timestamp failed basic format validation before the server even looked anything up. |
+| Rejected - UUID not found in valid tickets | `invalid_ticket` | The UUID isn't present in `valid_tickets`, or campus validation rejected the request first (see below) so the ticket was never checked. |
+| Rejected - invalid campus selection | `invalid_campus` | The submitted campus isn't in that participant's `CAMPUS_CONFIG` allowlist. This fires **before** the ticket check, so a stale Apps Script deployment that doesn't yet know about a newly added institution's campuses will reject every scan from it with this code, even for a perfectly valid ticket. |
+| Pending - server busy, retrying | `server_busy` | The script lock was contended (concurrent scans at the same moment). Transient; it retries automatically. |
+| Pending - temporary server error, retrying | `server_error` | An internal exception, a malformed response, or another unrecognized error. Transient; check Executions (below) if it doesn't clear. |
+| Pending - waiting for connection, retrying | `network` | The device is offline, the fetch failed, or the HTTP response wasn't `ok`. Transient; clears once connectivity returns. |
+
+### Apps Script -> Executions
+
+Open the Apps Script project bound to `fair-scan-file`, then the **Executions**
+tab in the left sidebar. Every `doPost` call appears there regardless of
+outcome — an intentional rejection (`unauthorized`, `invalid_campus`,
+`invalid_ticket`, `invalid_request`, `server_busy`) shows as a normal
+"Completed" execution with **no** thrown error, because rejecting a scan is
+expected behavior, not a script failure. Open the execution's logs to see the
+structured diagnostic line instead:
+
+- `console.warn` lines carry `{"event":"scan_rejected","code":"...","participantId":"...","uuid":"...","campus":"..."}` for every expected rejection, and `{"event":"scan_duplicate",...}` for an already-recorded scan.
+- `console.error` lines carry `{"event":"scan_error","code":"server_error",...,"message":"..."}` only for genuine internal exceptions (missing sheet, bad headers, etc.) — these are the only entries Apps Script flags as errored executions.
+
+None of these log lines ever contain the bearer token, its hash, or a
+Scanner_URL. `participantId`, `uuid`, and `campus` are the only fields
+present, which is enough to diagnose a symptom without exposing a credential.
+
+### Other symptoms
+
 | Symptom | Check |
 | --- | --- |
 | Configuration Error before camera starts | Confirm the new `/exec` URL replaced the API sentinel and use a generated participant URL |
-| Every scan is rejected as unauthorized | Confirm `Token_Hash`, `Active`, and `Scanner_URL` are from the same participant row |
-| Valid QR is rejected | Confirm n8n wrote the exact uppercase eight-character UUID to `valid_tickets` |
-| Item stays pending | Check connectivity, Apps Script executions, deployment access, and POST response |
+| Valid QR is rejected | Confirm n8n wrote the exact uppercase eight-character UUID to `valid_tickets`. If the diagnostic log for that request shows `invalid_campus` instead of `invalid_ticket`, the UUID is fine — the live Apps Script deployment is missing that institution's `CAMPUS_CONFIG` entry and needs to be redeployed with the current `Code.gs` (Deploy -> Manage deployments -> new version). Merging `Code.gs` to `main` never updates the live backend by itself. |
+| Item stays pending | Read its on-screen reason (`server_busy`, `server_error`, or `network`); check connectivity, Apps Script executions, deployment access, and the raw POST response |
 | `server_error` response | Verify all three exact tab names and header rows |
 | Old link still works after rotation | Confirm the latest Apps Script version is deployed and the old hash was replaced |

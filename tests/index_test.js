@@ -9,12 +9,11 @@ const VALID_TOKEN = 'a'.repeat(64);
 const TEST_API_URL = 'https://script.google.com/macros/s/test-deployment/exec';
 const DEPLOYED_API_URL = 'https://script.google.com/macros/s/AKfycby6LOkfukNUs45lPizNuFrGCzAzQEo0WNCRHgajRSGvhCTF0j1JrTDpsyygHW89Bwzw/exec';
 
-function createElement(tagName, innerHTMLWrites) {
+function createElement(tagName, innerHTMLWrites, elements) {
   const element = {
     tagName: tagName.toUpperCase(),
     children: [],
     className: '',
-    id: '',
     textContent: '',
     disabled: false,
     hidden: false,
@@ -81,6 +80,19 @@ function createElement(tagName, innerHTMLWrites) {
     }
   });
 
+  let idValue = '';
+  Object.defineProperty(element, 'id', {
+    get() {
+      return idValue;
+    },
+    set(value) {
+      idValue = value;
+      if (elements && value) {
+        elements.set(value, element);
+      }
+    }
+  });
+
   return element;
 }
 
@@ -105,11 +117,11 @@ function createHarness({
   }
 
   const document = {
-    body: createElement('body', innerHTMLWrites),
-    createElement: tagName => createElement(tagName, innerHTMLWrites),
+    body: createElement('body', innerHTMLWrites, elements),
+    createElement: tagName => createElement(tagName, innerHTMLWrites, elements),
     getElementById(id) {
       if (!elements.has(id)) {
-        elements.set(id, createElement('div', innerHTMLWrites));
+        elements.set(id, createElement('div', innerHTMLWrites, elements));
       }
       return elements.get(id);
     }
@@ -330,7 +342,14 @@ test('treats a server duplicate as synchronized', async () => {
   assert.equal(harness.queue()[0].status, 'synced');
 });
 
-for (const code of ['unauthorized', 'invalid_request', 'invalid_ticket']) {
+const REJECTION_MESSAGES = {
+  unauthorized: 'Rejected - institution link unauthorized',
+  invalid_request: 'Rejected - invalid scan request',
+  invalid_ticket: 'Rejected - UUID not found in valid tickets',
+  invalid_campus: 'Rejected - invalid campus selection'
+};
+
+for (const code of ['unauthorized', 'invalid_request', 'invalid_ticket', 'invalid_campus']) {
   test(`marks ${code} as rejected and does not retry it`, async () => {
     const harness = createHarness({
       online: true,
@@ -342,7 +361,42 @@ for (const code of ['unauthorized', 'invalid_request', 'invalid_ticket']) {
     await harness.context.sync();
     assert.equal(harness.fetchCalls.length, 1);
   });
+
+  test(`preserves the ${code} server code on the queued scan and shows its reason`, async () => {
+    const harness = createHarness({
+      online: true,
+      fetchResponses: [{ result: 'error', code }]
+    });
+    harness.context.onScanSuccess('A1B2C3D4');
+    await harness.flushPromises();
+
+    assert.equal(harness.queue()[0].rejectionCode, code);
+    assert.equal(harness.queue()[0].uuid, 'A1B2C3D4');
+
+    const listItem = harness.elements.get('scans-list').children[0];
+    assert.equal(listItem.querySelector('.scan-reason').textContent, REJECTION_MESSAGES[code]);
+    assert.equal(listItem.querySelector('.scan-uuid').textContent, 'A1B2C3D4');
+  });
 }
+
+test('a rejected scan surviving a page reload still shows its reason', () => {
+  const harness = createHarness({
+    initialQueue: [{
+      id: 'stored-rejected',
+      participantId: 'constructor',
+      token: '',
+      uuid: 'A1B2C3D4',
+      campus: '',
+      timestamp: '2026-07-27T12:00:00.000Z',
+      status: 'rejected',
+      rejectionCode: 'invalid_ticket'
+    }]
+  });
+
+  assert.equal(harness.queue()[0].rejectionCode, 'invalid_ticket');
+  const listItem = harness.elements.get('scans-list').children[0];
+  assert.equal(listItem.querySelector('.scan-reason').textContent, REJECTION_MESSAGES.invalid_ticket);
+});
 
 test('keeps server-busy scans pending for a later retry', async () => {
   const harness = createHarness({
@@ -355,10 +409,42 @@ test('keeps server-busy scans pending for a later retry', async () => {
   harness.context.onScanSuccess('A1B2C3D4');
   await harness.flushPromises();
   assert.equal(harness.queue()[0].status, 'pending');
+  assert.equal(harness.queue()[0].transientCode, 'server_busy');
+  assert.equal(harness.queue()[0].rejectionCode, '');
+  const listItem = harness.elements.get('scans-list').children[0];
+  assert.equal(listItem.querySelector('.scan-reason').textContent, 'Pending - server busy, retrying');
 
   await harness.context.sync();
   assert.equal(harness.fetchCalls.length, 2);
   assert.equal(harness.queue()[0].status, 'synced');
+  assert.equal(harness.queue()[0].transientCode, '');
+  assert.equal(listItem.querySelector('.scan-reason').textContent, '');
+});
+
+test('keeps a non-ok HTTP response pending as a network issue', async () => {
+  const harness = createHarness({
+    online: true,
+    fetchResponses: [{ ok: false }]
+  });
+  harness.context.onScanSuccess('A1B2C3D4');
+  await harness.flushPromises();
+  assert.equal(harness.queue()[0].status, 'pending');
+  assert.equal(harness.queue()[0].transientCode, 'network');
+  const listItem = harness.elements.get('scans-list').children[0];
+  assert.equal(listItem.querySelector('.scan-reason').textContent, 'Pending - waiting for connection, retrying');
+});
+
+test('keeps a malformed/internal-error response pending as a temporary server error', async () => {
+  const harness = createHarness({
+    online: true,
+    fetchResponses: [{ result: 'error', code: 'server_error' }]
+  });
+  harness.context.onScanSuccess('A1B2C3D4');
+  await harness.flushPromises();
+  assert.equal(harness.queue()[0].status, 'pending');
+  assert.equal(harness.queue()[0].transientCode, 'server_error');
+  const listItem = harness.elements.get('scans-list').children[0];
+  assert.equal(listItem.querySelector('.scan-reason').textContent, 'Pending - temporary server error, retrying');
 });
 
 test('keeps network failures pending without logging credentials', async () => {
@@ -369,6 +455,9 @@ test('keeps network failures pending without logging credentials', async () => {
   harness.context.onScanSuccess('A1B2C3D4');
   await harness.flushPromises();
   assert.equal(harness.queue()[0].status, 'pending');
+  assert.equal(harness.queue()[0].transientCode, 'network');
+  const listItem = harness.elements.get('scans-list').children[0];
+  assert.equal(listItem.querySelector('.scan-reason').textContent, 'Pending - waiting for connection, retrying');
   assert.equal(
     harness.consoleMessages.flat().some(value => value.includes(VALID_TOKEN)),
     false,
@@ -553,4 +642,5 @@ test('synced and rejected campus-enabled scans still clear the bearer credential
   assert.equal(harness.queue()[0].status, 'rejected');
   assert.equal(harness.queue()[0].token, '');
   assert.equal(harness.queue()[0].campus, 'Madrid');
+  assert.equal(harness.queue()[0].rejectionCode, 'invalid_ticket');
 });
