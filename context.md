@@ -39,8 +39,11 @@ touched, and the full test suite (frontend, Apps Script, participant links,
 email template, Python processor) still passes unchanged.
 
 A high-volume synchronization optimization was implemented on
-`feature/high-volume-sync-optimization` (not yet merged to `main`, not
-deployed). It targets the real event-day load: 30+ participant tables
+`feature/high-volume-sync-optimization` and merged into `main`. **Not yet
+deployed**: the live Apps Script deployment and the published GitHub Pages
+`index.html` are still the pre-optimization versions until the manual
+redeploy steps in `TESTING.md`'s "High-Volume Synchronization — Deployment"
+section are carried out. It targets the real event-day load: 30+ participant tables
 scanning simultaneously, one volunteer scanning several visitors
 back-to-back, and the same visitor legitimately being scanned by multiple
 institutions. `index.html` now sends pending scans in micro-batches (up to
@@ -75,7 +78,7 @@ somehow arrives with more than 10 scans, since the official frontend never
 sends one and a truncation would otherwise drop scans with no result
 returned for them at all.
 
-Outside of that pending feature, the public scanner workflow is unchanged.
+Outside of that pending deployment, the public scanner workflow is unchanged.
 `Code.gs`, `ParticipantLinks.gs`, and `index.html` do not need redeployment
 for the `Which Fair` reporting-only change described below.
 
