@@ -17,7 +17,8 @@ const EXPECTED_CAMPUS_CONFIG = {
   campspain: ['Vigo', 'Madrid', 'Undecided'],
   into: ['US', 'UK', 'Australia', 'Spain', 'UAE', 'Undecided'],
   gedu: ['US', 'UK', 'Ireland', 'UAE', 'Australia', 'Germany', 'Malta', 'France', 'Spain', 'Undecided'],
-  burgsb: ['Dijon', 'Lyon', 'Undecided']
+  burgsb: ['Dijon', 'Lyon', 'Undecided'],
+  srhuni: ['Berlin', 'Heidelberg', 'Leipzig', 'Dresden', 'EBS Business School', 'Undecided']
 };
 
 function extractCampusConfigSnippet(source, filename) {

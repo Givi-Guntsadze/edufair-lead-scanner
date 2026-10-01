@@ -1,8 +1,20 @@
 # EduFair Lead Scanner Context
 
-Updated: 2026-09-16
+Updated: 2026-10-01
 
 ## Current State
+
+SRH University (`srhuni`) is included in the 2026-10-01 `main` release in
+`Code.gs` and `index.html`: Berlin, Heidelberg, Leipzig, Dresden, EBS Business
+School, and Undecided, verified against the organizer's Campuses sheet on
+2026-10-01. GitHub Pages publishes the frontend from `main`; the organizer
+will update `Code.gs` and deploy a new Apps Script version behind the existing
+`/exec` URL. Backend deployment and live SRH scanning are not yet verified.
+La Salle (`lasalle`)
+and Caucasus University (`caucuni`) keep the single-campus scanning flow.
+The participant-link error on row 37 was a trailing ASCII space in
+`Caucasus University `, not a restriction on university names. The organizer
+will remove the space; participant-name validation is unchanged.
 
 The post-event reporting workflow supports the registration field `Which Fair`.
 After `registrations.csv` is matched to `raw_scans.csv` by `UUID`, every
@@ -39,11 +51,14 @@ touched, and the full test suite (frontend, Apps Script, participant links,
 email template, Python processor) still passes unchanged.
 
 A high-volume synchronization optimization was implemented on
-`feature/high-volume-sync-optimization` and merged into `main`. **Not yet
-deployed**: the live Apps Script deployment and the published GitHub Pages
-`index.html` are still the pre-optimization versions until the manual
-redeploy steps in `TESTING.md`'s "High-Volume Synchronization — Deployment"
-section are carried out. It targets the real event-day load: 30+ participant tables
+`feature/high-volume-sync-optimization` and merged into `main`. The 2026-10-01
+SRH release publishes that existing frontend optimization alongside the campus
+addition. **Apps Script update/redeployment remains organizer-managed and
+unverified**: use the current repository `Code.gs`, which includes both the
+batch receiver and SRH campus allowlist, following `TESTING.md`'s
+"High-Volume Synchronization — Deployment" section. Do not test SRH campus
+scans against the old receiver; it will reject those choices as `invalid_campus`.
+The optimization targets the real event-day load: 30+ participant tables
 scanning simultaneously, one volunteer scanning several visitors
 back-to-back, and the same visitor legitimately being scanned by multiple
 institutions. `index.html` now sends pending scans in micro-batches (up to

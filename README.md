@@ -238,6 +238,12 @@ Campus options are a static, offline-safe configuration keyed by
 copies never drift apart. The scanner never fetches the campus reference
 Google Sheet at runtime, so it remains fully offline-capable.
 
+SRH University (`srhuni`) is configured with Berlin, Heidelberg, Leipzig,
+Dresden, EBS Business School, and Undecided, from the organizer's campus
+reference sheet. Adding a participant row alone does not update campus options;
+publish the frontend configuration and redeploy the matching receiver before
+using a newly configured institution's campus selections.
+
 To add another institution later, add one more entry ending in
 `'Undecided'` to both copies:
 

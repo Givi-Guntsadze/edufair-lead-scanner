@@ -858,7 +858,8 @@ test('configured participant sees a campus selector with every configured option
 for (const [participantId, expectedOptions] of [
   ['into', ['US', 'UK', 'Australia', 'Spain', 'UAE', 'Undecided']],
   ['gedu', ['US', 'UK', 'Ireland', 'UAE', 'Australia', 'Germany', 'Malta', 'France', 'Spain', 'Undecided']],
-  ['burgsb', ['Dijon', 'Lyon', 'Undecided']]
+  ['burgsb', ['Dijon', 'Lyon', 'Undecided']],
+  ['srhuni', ['Berlin', 'Heidelberg', 'Leipzig', 'Dresden', 'EBS Business School', 'Undecided']]
 ]) {
   test(`newly configured participant ${participantId} sees exactly its expected campus options`, () => {
     const harness = createHarness({ search: `?uni=${participantId}`, online: true });
@@ -870,6 +871,17 @@ for (const [participantId, expectedOptions] of [
     assert.equal(optionButtons[optionButtons.length - 1].textContent, 'Undecided');
   });
 }
+
+test('SRH requires a campus, retains it per visitor, and resets after capture', () => {
+  const harness = createHarness({ search: '?uni=srhuni', online: false });
+  harness.context.onScanSuccess('A1B2C3D4');
+  assert.deepEqual(harness.queue(), []);
+  harness.context.selectCampus('EBS Business School');
+  harness.context.onScanSuccess('A1B2C3D4');
+  assert.equal(harness.queue()[0].campus, 'EBS Business School');
+  harness.context.onScanSuccess('E5F6G7H8');
+  assert.equal(harness.queue().length, 1);
+});
 
 test('configured institution cannot create a new queue item without a campus selection', () => {
   const harness = createHarness({ search: CONFIGURED_SEARCH, online: false });
