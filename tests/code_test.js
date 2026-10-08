@@ -826,6 +826,57 @@ for (const value of [
   assert.equal(rawScans.getLastRow(), 1, 'an oversized request writes nothing');
 }
 
+for (const count of [11, 1000, 10000]) {
+  const { context, spreadsheet, openedSpreadsheetIds, stats, lockReleases } = createEnvironment();
+  const forbidden = () => { throw new Error('Oversized rejection must not process scans or call services'); };
+  context.normalizeScanInput = forbidden;
+  context.processScanBatch = forbidden;
+  context.CacheService.getScriptCache = forbidden;
+  context.LockService.getScriptLock = forbidden;
+  context.PropertiesService.getScriptProperties = forbidden;
+  context.SpreadsheetApp.openById = forbidden;
+  const output = context.doPost({
+    parameter: {},
+    postData: {
+      type: 'application/json',
+      contents: JSON.stringify({ scans: Array.from({ length: count }, () => ({
+        client_id: 'untrusted-client-id', token: UNKNOWN_TOKEN
+      })) })
+    }
+  });
+  assert.equal(output.text, JSON.stringify({ results: [], result: 'error', code: 'invalid_request' }),
+    `rejection of ${count} unauthenticated scans must have the same fixed response`);
+  assert.deepEqual(openedSpreadsheetIds, []);
+  assert.deepEqual(stats.readCalls, {});
+  assert.deepEqual(stats.writeCalls, {});
+  assert.equal(lockReleases(), 0);
+  assert.equal(spreadsheet.getSheetByName('Raw_Scans').getLastRow(), 1);
+}
+
+{
+  // Exactly 10 legitimate scans, including campus and regular participants,
+  // must still be accepted and duplicate retries must not append more rows.
+  const sheets = defaultSheets();
+  const scans = Array.from({ length: 10 }, (_, index) => {
+    const uuid = 'LIMIT' + String(index).padStart(3, '0');
+    sheets.valid_tickets.push([uuid]);
+    return index % 2 === 0 ? { uuid } : {
+      uuid, participantId: 'ieu', token: CONFIGURED_TOKEN, campus: 'Madrid'
+    };
+  });
+  const { context, spreadsheet } = createEnvironment(sheets);
+  const accepted = postBatch(context, scans);
+  assert.equal(accepted.results.length, 10);
+  assert.ok(accepted.results.every(result => result.result === 'success' && !result.duplicate));
+  const rawScans = spreadsheet.getSheetByName('Raw_Scans');
+  assert.equal(rawScans.getLastRow(), 11);
+  assert.deepEqual(rawScans.rows.slice(1).map(row => row[3]),
+    scans.map(scan => scan.campus || ''));
+  const retry = postBatch(context, scans);
+  assert.ok(retry.results.every(result => result.result === 'success' && result.duplicate));
+  assert.equal(rawScans.getLastRow(), 11);
+}
+
 {
   // The same UUID is independently valid for different institutions, and a
   // mixed batch (success, duplicate, rejection, and a transient failure)

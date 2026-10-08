@@ -22,7 +22,7 @@ Expected results:
 
 - `Code.gs authorization tests passed`
 - `Participant link generation tests passed`
-- fifty-three passing frontend subtests
+- fifty-seven passing frontend subtests
 - four passing confirmation-email escaping subtests
 - `Campus configuration parity tests passed`
 - Python compilation exits with code 0
@@ -42,6 +42,24 @@ back-to-back batches as it takes, stopping early only on a transient failure
 (so nothing already in flight is lost), with no volunteer action required
 between batches, an oversized request rejected rather than silently
 truncated, and a browser reload never losing or duplicating a queued scan.
+
+## PR #4 — Oversized Batch Rejection (2026-10-08)
+
+Local receiver tests confirm a constant response for 11, 1,000, and 10,000
+unauthenticated scans, with no per-scan normalization, spreadsheet reads or
+writes, cache access, or locks. Exactly 10 valid scans from regular and
+campus-configured participants remain accepted; replay writes no extra rows.
+Frontend regressions confirm the bounded error retains pending scans, tokens,
+and campus selections, stops the current drain, and allows a later retry to
+sync 12 scans as batches of 10 then 2. Existing legacy, offline, timeout,
+authorization, campus, email, and CSV-report suites also pass.
+
+Do not send oversized attack payloads to the live event receiver to test this.
+After approval, update only Apps Script `Code.gs` and deploy a new version
+through **Deploy -> Manage deployments -> Edit -> New version -> Deploy**,
+retaining the existing `/exec` URL. Neither `ParticipantLinks.gs` nor the
+frontend needs changing for this fix. Live Apps Script validation and the
+later multi-scanner Playwright stress test have not been performed here.
 
 ## Apps Script Pre-deployment Check
 

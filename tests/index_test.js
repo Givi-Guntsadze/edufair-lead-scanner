@@ -694,6 +694,43 @@ test('a transient failure partway through a drain stops that cycle; the rest of 
   assert.equal(queue[10].transientCode, 'network');
 });
 
+for (const participantId of ['constructor', 'ieu']) {
+  test(`bounded batch-level rejection preserves ${participantId} scans and a retry drains the queue`, async () => {
+    const harness = createHarness({ search: `?uni=${participantId}`, online: false });
+    const uuids = Array.from({ length: 12 }, (_, index) => 'RETRY' + String(index).padStart(3, '0'));
+    for (const uuid of uuids) {
+      if (participantId === 'ieu') harness.context.selectCampus('Madrid');
+      harness.context.onScanSuccess(uuid);
+    }
+    const originalQueue = harness.queue();
+    const originalFetch = harness.context.fetch;
+    const requests = [];
+    harness.context.fetch = async (url, options) => {
+      requests.push(JSON.parse(options.body));
+      if (requests.length === 1) {
+        return { ok: true, async json() {
+          return { results: [], result: 'error', code: 'invalid_request' };
+        } };
+      }
+      return originalFetch(url, options);
+    };
+    harness.goOnline();
+    await harness.flushPromises();
+    assert.equal(requests.length, 1, 'drain stops on a response without per-scan acknowledgements');
+    const pending = harness.queue();
+    assert.equal(pending.length, 12);
+    assert.ok(pending.every(scan => scan.status === 'pending'));
+    assert.deepEqual(pending.map(scan => [scan.id, scan.uuid, scan.campus, scan.token]),
+      originalQueue.map(scan => [scan.id, scan.uuid, scan.campus, scan.token]));
+    await harness.context.sync();
+    assert.equal(requests.length, 3, 'retry sends 10 then 2 scans, never an oversized request');
+    assert.deepEqual(requests.map(request => request.scans.length), [10, 10, 2]);
+    assert.ok(harness.queue().every(scan => scan.status === 'synced'));
+    assert.deepEqual(harness.queue().map(scan => [scan.uuid, scan.campus]),
+      originalQueue.map(scan => [scan.uuid, scan.campus]));
+  });
+}
+
 test('a scan missing from the server response stays pending, never marked synced or silently removed', async () => {
   const harness = createHarness({
     online: false,
