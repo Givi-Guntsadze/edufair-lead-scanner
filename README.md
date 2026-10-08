@@ -27,6 +27,11 @@ Post-event
 The Apps Script web app is bound only to `fair-scan-file`. It never opens or
 reads the workbook containing the `Registrations` tab.
 
+Scanner uploads keep a JSON body but use `Content-Type: text/plain;charset=UTF-8`
+to avoid an unsupported cross-origin OPTIONS preflight at Apps Script.
+Responses remain readable so scans are only marked synchronized after server
+confirmation; this is not an opaque `no-cors` upload.
+
 ## Repository Structure
 
 ```text

@@ -4,6 +4,17 @@ Updated: 2026-10-08
 
 ## Current State
 
+The organizer reports both receiver security fixes redeployed behind the
+existing web-app URL on 2026-10-08. The live Playwright pilot found a separate
+frontend transport issue: `application/json` triggered an OPTIONS preflight
+that Apps Script did not authorize. The frontend now sends the same JSON
+body as `text/plain;charset=UTF-8`, retaining readable responses, credential
+validation, retries, and per-scan response matching. A test covers this
+request contract. A live diagnostic with that header returned success and
+was read back in Raw_Scans; the full 35-institution test is still pending.
+This frontend-only change deploys through GitHub Pages and needs no further
+Apps Script replacement or redeployment.
+
 PR #4 (`codex/fix-unbounded-response-for-oversized-requests`) hardens only
 oversized JSON batch rejection. More than 10 scans now receive a fixed
 `{ results: [], result: 'error', code: 'invalid_request' }` response without
@@ -34,9 +45,8 @@ actionable issues. See `TESTING.md` for exact coverage and deployment
 boundaries. Only `Code.gs` needs replacing in Apps Script and a new version
 of the existing web-app deployment; no URLs, tokens, Sheets, frontend, or n8n
 changes are required. Apps Script replacement/redeployment remains with the
-organizer and has not been verified for this fix. Live validation and the
-multi-scanner Playwright stress test follow that redeployment; neither has
-been performed yet.
+organizer. The organizer has since reported redeployment; see the live pilot
+and frontend transport note above. Full multi-scanner validation is pending.
 
 SRH University (`srhuni`) is included in the 2026-10-01 `main` release in
 `Code.gs` and `index.html`: Berlin, Heidelberg, Leipzig, Dresden, EBS Business

@@ -396,6 +396,20 @@ test('posts credentials in the body without putting the token in the URL', async
   );
 });
 
+test('uses a simple cross-origin POST while keeping JSON and readable responses', async () => {
+  const harness = createHarness({ online: true });
+  harness.context.onScanSuccess('A1B2C3D4');
+  await harness.flushPromises();
+
+  const { options } = harness.fetchCalls[0];
+  assert.deepEqual(Object.keys(options.headers), ['Content-Type']);
+  assert.equal(options.headers['Content-Type'], 'text/plain;charset=UTF-8');
+  assert.notEqual(options.mode, 'no-cors', 'opaque responses cannot confirm saved scans');
+  assert.equal(options.redirect, 'follow');
+  assert.equal(JSON.parse(options.body).scans[0].uuid, 'A1B2C3D4');
+  assert.equal(harness.queue()[0].status, 'synced');
+});
+
 test('treats a server duplicate as synchronized', async () => {
   const harness = createHarness({
     online: true,

@@ -1287,7 +1287,8 @@
                 response = await fetch(API_URL, {
                     method: 'POST',
                     headers: {
-                        'Content-Type': 'application/json'
+                        // Apps Script parses JSON; this type avoids OPTIONS preflight.
+                        'Content-Type': 'text/plain;charset=UTF-8'
                     },
                     body: payload,
                     credentials: 'omit',
