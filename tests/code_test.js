@@ -796,8 +796,8 @@ for (const value of [
   // request, chunking any larger backlog across consecutive requests
   // instead. A single request that still arrives oversized (only possible
   // from a non-conforming client) is rejected outright rather than
-  // silently truncated, so none of its scans are ever dropped with no
-  // result at all — and it must not write anything.
+  // silently truncated. Its rejection response must stay constant in size
+  // and must not reflect attacker-controlled client IDs.
   const sheets = defaultSheets();
   const uuids = [];
   for (let i = 0; i < 12; i += 1) {
@@ -807,12 +807,22 @@ for (const value of [
   }
   const { context, spreadsheet } = createEnvironment(sheets);
   const rawScans = spreadsheet.getSheetByName('Raw_Scans');
-  const batch = postBatch(context, uuids.map(uuid => ({ uuid })));
-  assert.equal(batch.results.length, 12, 'every submitted scan gets its own result, none silently dropped');
-  for (const scan of batch.scans) {
-    const result = resultFor(batch, scan.client_id);
-    assert.deepEqual(result, { client_id: scan.client_id, result: 'error', code: 'invalid_request' });
-  }
+  const attackerClientId = 'attacker-controlled-id'.repeat(1000);
+  const response = parseResponse(context.doPost({
+    parameter: {},
+    postData: {
+      type: 'application/json',
+      contents: JSON.stringify({
+        scans: uuids.map(uuid => scanInput({ uuid, clientId: attackerClientId }))
+      })
+    }
+  }));
+  assert.deepEqual(response, {
+    results: [],
+    result: 'error',
+    code: 'invalid_request'
+  }, 'oversized batches get one bounded batch-level error');
+  assert.equal(JSON.stringify(response).includes(attackerClientId), false, 'client IDs are not reflected');
   assert.equal(rawScans.getLastRow(), 1, 'an oversized request writes nothing');
 }
 

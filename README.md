@@ -321,8 +321,8 @@ scan is ever lost, only delayed. `Code.gs` mirrors this on the way in: the
 official frontend never sends more than 10 scans per request (it chunks
 locally), but if a request somehow arrives oversized anyway, the backend
 rejects that malformed request outright (one `invalid_request` result per
-submitted scan) rather than silently truncating it, which would otherwise
-drop the excess scans with no result at all.
+request, with no submitted values reflected) rather than performing
+unbounded work to construct one result per submitted scan.
 
 `Code.gs` also still accepts the original single-scan
 `application/x-www-form-urlencoded` request and answers with the original
