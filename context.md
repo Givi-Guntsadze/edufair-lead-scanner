@@ -18,8 +18,25 @@ testing and independent review. Apps Script deployment and live validation
 remain pending with the organizer. Deploying it requires updating Apps Script
 `Code.gs` and creating a new deployment version
 behind the existing `/exec` URL; no frontend or Sheet migration is required.
-The second security issue and multi-scanner Playwright stress test are deferred
-at the organizer's request.
+The second, medium-severity issue (batch validation sheet-read amplification)
+is included in the 2026-10-08 `main` release from
+`codex/fix-batch-validation-read-amplification`. `Code.gs` now reuses lazy
+request-local participant rows and a ticket membership set, with at most one
+full data read of each validation sheet per request. Shared caches and their
+TTLs, authorization/campus checks, legacy and batch protocols, mixed
+credentials, duplicate handling, and lock/write behavior are unchanged.
+Unknown tickets are not cached across requests; tickets added after a
+request's snapshot are visible on the next request. Baseline suites passed
+before the fix, both read-limit regressions failed with `10 !== 1`, and all
+receiver, participant-link, campus-parity, frontend, email, and Python report
+tests pass after the fix, and an independent read-only code review found no
+actionable issues. See `TESTING.md` for exact coverage and deployment
+boundaries. Only `Code.gs` needs replacing in Apps Script and a new version
+of the existing web-app deployment; no URLs, tokens, Sheets, frontend, or n8n
+changes are required. Apps Script replacement/redeployment remains with the
+organizer and has not been verified for this fix. Live validation and the
+multi-scanner Playwright stress test follow that redeployment; neither has
+been performed yet.
 
 SRH University (`srhuni`) is included in the 2026-10-01 `main` release in
 `Code.gs` and `index.html`: Berlin, Heidelberg, Leipzig, Dresden, EBS Business

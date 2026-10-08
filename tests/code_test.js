@@ -1123,4 +1123,183 @@ for (const count of [11, 1000, 10000]) {
   assert.deepEqual(spreadsheet.getSheetByName('Raw_Scans').getLastRow(), 2);
 }
 
+// --- Security: validation data reads are bounded per request ---
+
+{
+  const { context, spreadsheet, stats } = createEnvironment();
+  const unknownTokens = Array.from({ length: 10 }, (_, i) => ({
+    token: (i + 16).toString(16).padStart(64, '0')
+  }));
+  const batch = postBatch(context, unknownTokens);
+  assert.equal(batch.results.length, 10);
+  assert.ok(batch.results.every(result => result.code === 'unauthorized'));
+  assert.equal(stats.dataReadCalls.participant_url, 1,
+    'ten distinct unknown tokens must share one participant data read');
+  assert.equal(stats.dataReadCalls.valid_tickets || 0, 0,
+    'unauthorized scans must never read ticket data');
+  assert.equal(stats.dataReadCalls.Raw_Scans || 0, 0);
+  assert.equal(spreadsheet.getSheetByName('Raw_Scans').getLastRow(), 1);
+  assert.deepEqual(stats.writeCalls, {});
+
+  const nextBatch = postBatch(context, unknownTokens.map((_, i) => ({
+    token: (i + 32).toString(16).padStart(64, '0')
+  })));
+  assert.ok(nextBatch.results.every(result => result.code === 'unauthorized'));
+  assert.equal(stats.dataReadCalls.participant_url, 2,
+    'a fresh request gets its own participant snapshot, not a shared stale one');
+}
+
+{
+  const { context, spreadsheet, stats } = createEnvironment();
+  const unknownTickets = Array.from({ length: 10 }, (_, i) => ({ uuid: 'BADTIX0' + i }));
+  for (let request = 1; request <= 2; request += 1) {
+    const batch = postBatch(context, unknownTickets);
+    assert.equal(batch.results.length, 10);
+    assert.ok(batch.results.every(result => result.code === 'invalid_ticket'));
+    assert.equal(stats.dataReadCalls.valid_tickets, request,
+      'distinct invalid tickets must cause at most one ticket data read per request');
+  }
+  assert.equal(stats.dataReadCalls.participant_url, 1);
+  assert.equal(stats.dataReadCalls.Raw_Scans || 0, 0);
+  assert.deepEqual(stats.writeCalls, {});
+
+  spreadsheet.getSheetByName('valid_tickets').appendRow(['BADTIX00']);
+  assert.deepEqual(postRequest(context, { uuid: 'BADTIX00' }),
+    { result: 'success', duplicate: false },
+    'a previously rejected ticket is usable on the next request after registration');
+  assert.equal(stats.dataReadCalls.valid_tickets, 3);
+  assert.equal(spreadsheet.getSheetByName('Raw_Scans').getLastRow(), 2);
+}
+
+{
+  const { context, stats } = createEnvironment();
+  const batch = postBatch(context, Array.from({ length: 10 }, () => ({ uuid: 'BADTIX99' })));
+  assert.ok(batch.results.every(result => result.code === 'invalid_ticket'));
+  assert.equal(stats.dataReadCalls.valid_tickets, 1,
+    'repeating the same invalid ticket within a batch must not repeat the sheet read');
+  assert.deepEqual(stats.writeCalls, {});
+}
+
+{
+  const sheets = defaultSheets();
+  const scans = Array.from({ length: 10 }, (_, i) => ({
+    uuid: 'READ' + String(i).padStart(4, '0'),
+    participantId: i % 2 === 0 ? 'constructor' : 'ieu',
+    token: i % 2 === 0 ? VALID_TOKEN : CONFIGURED_TOKEN,
+    campus: i % 2 === 0 ? '' : (i % 4 === 1 ? 'Madrid' : 'Segovia')
+  }));
+  sheets.valid_tickets.push(...scans.map(scan => [scan.uuid]));
+  sheets.Raw_Scans.push(['2026-07-27T11:00:00.000Z', 'otheruni', 'PREV0001', '']);
+  const { context, spreadsheet, stats, cache } = createEnvironment(sheets);
+  const rawScans = spreadsheet.getSheetByName('Raw_Scans');
+  const first = postBatch(context, scans);
+  assert.ok(first.results.every(result => result.result === 'success' && result.duplicate === false));
+  assert.equal(stats.dataReadCalls.participant_url, 1,
+    'different authorized participants must share the request-local participant data');
+  assert.equal(stats.dataReadCalls.valid_tickets, 1);
+  assert.equal(stats.dataReadCalls.Raw_Scans, 1);
+  assert.equal(stats.writeCalls.Raw_Scans, 1);
+  assert.equal(rawScans.getLastRow(), 12);
+  assert.deepEqual(rawScans.rows.slice(2).map(row => row.slice(1)),
+    scans.map(scan => [scan.participantId, scan.uuid, scan.campus]));
+
+  const replay = postBatch(context, scans);
+  assert.ok(replay.results.every(result => result.result === 'success' && result.duplicate === true));
+  assert.equal(stats.dataReadCalls.participant_url, 1, 'warm participant cache skips data reads');
+  assert.equal(stats.dataReadCalls.valid_tickets, 1, 'warm ticket cache skips data reads');
+  assert.equal(stats.dataReadCalls.Raw_Scans, 1, 'warm duplicate cache skips data reads');
+  assert.equal(stats.writeCalls.Raw_Scans, 1);
+
+  cache.clear();
+  const coldReplay = postBatch(context, scans);
+  assert.ok(coldReplay.results.every(result => result.result === 'success' && result.duplicate === true));
+  assert.equal(stats.dataReadCalls.participant_url, 2);
+  assert.equal(stats.dataReadCalls.valid_tickets, 2);
+  assert.equal(stats.dataReadCalls.Raw_Scans, 2);
+  assert.equal(stats.writeCalls.Raw_Scans, 1, 'cache eviction must not bypass sheet-backed duplicates');
+  assert.equal(rawScans.getLastRow(), 12);
+}
+
+{
+  const { context, stats } = createEnvironment();
+  const batch = postBatch(context, [
+    { uuid: 'TOO-LONG-UUID' },
+    { token: 'malformed' },
+    { timestamp: 'bad timestamp' }
+  ]);
+  assert.ok(batch.results.every(result => result.code === 'invalid_request'));
+  assert.deepEqual(stats.dataReadCalls, {}, 'format-invalid items must not load validation snapshots');
+  assert.deepEqual(stats.writeCalls, {});
+}
+
+{
+  const { context, stats } = createEnvironment();
+  const batch = postBatch(context, [
+    { participantId: 'inactive', token: INACTIVE_TOKEN },
+    { participantId: 'ieu', token: VALID_TOKEN },
+    { participantId: 'ieu', token: CONFIGURED_TOKEN, campus: 'NotARealCampus' },
+    { campus: 'Madrid' }
+  ]);
+  assert.deepEqual(batch.results.map(result => result.code),
+    ['unauthorized', 'unauthorized', 'invalid_campus', 'invalid_campus']);
+  assert.equal(stats.dataReadCalls.participant_url, 1);
+  assert.equal(stats.dataReadCalls.valid_tickets || 0, 0,
+    'ticket loading must stay after both participant and campus authorization');
+  assert.deepEqual(stats.writeCalls, {});
+}
+
+{
+  const sheets = defaultSheets();
+  sheets.participant_url[1][2] = sha256(VALID_TOKEN).toUpperCase();
+  sheets.valid_tickets.push(['  mixed001  '], [87654321]);
+  const { context, stats } = createEnvironment(sheets);
+  const batch = postBatch(context, [{ uuid: 'MIXED001' }, { uuid: '87654321' }]);
+  assert.ok(batch.results.every(result => result.result === 'success'));
+  assert.equal(stats.dataReadCalls.participant_url, 1);
+  assert.equal(stats.dataReadCalls.valid_tickets, 1,
+    'ticket snapshot must retain trimming/case normalization and numeric cell handling');
+}
+
+{
+  const sheets = defaultSheets();
+  sheets.participant_url.push(['Duplicate', 'duplicate', sha256(VALID_TOKEN).toUpperCase(), false, '']);
+  const { context, stats } = createEnvironment(sheets);
+  assert.throws(() => postBatch(context, [{}]), /Duplicate participant token hash/,
+    'duplicate token hashes must still fail closed, even when one row is inactive');
+  assert.equal(stats.dataReadCalls.valid_tickets || 0, 0);
+  assert.deepEqual(stats.writeCalls, {});
+}
+
+{
+  const sheets = defaultSheets();
+  sheets.participant_url[1][1] = '=UNSAFE';
+  const { context, stats } = createEnvironment(sheets);
+  assert.throws(() => postBatch(context, [{}]), /Invalid configured participant ID/);
+  assert.equal(stats.dataReadCalls.valid_tickets || 0, 0);
+  assert.deepEqual(stats.writeCalls, {});
+}
+
+{
+  const sheets = defaultSheets();
+  sheets.participant_url.push(['Unrelated duplicate', 'duplicate', sha256(INACTIVE_TOKEN), false, '']);
+  const { context } = createEnvironment(sheets);
+  assert.deepEqual(postRequest(context), { result: 'success', duplicate: false },
+    'an unrelated duplicate hash must not reject a correctly configured participant');
+}
+
+{
+  const { context, stats, cache } = createEnvironment();
+  cache.get = () => null;
+  cache.put = () => {};
+  const batch = postBatch(context, [
+    { uuid: 'A1B2C3D4' }, { uuid: '12345678' }, { uuid: 'BADTIX99' }
+  ]);
+  assert.equal(resultFor(batch, batch.scans[0].client_id).result, 'success');
+  assert.equal(resultFor(batch, batch.scans[1].client_id).result, 'success');
+  assert.equal(resultFor(batch, batch.scans[2].client_id).code, 'invalid_ticket');
+  assert.equal(stats.dataReadCalls.participant_url, 1);
+  assert.equal(stats.dataReadCalls.valid_tickets, 1,
+    'the read bound must not depend on best-effort shared-cache retention');
+}
+
 console.log('Code.gs authorization tests passed');
