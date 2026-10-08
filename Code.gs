@@ -221,8 +221,8 @@ function successResult(clientId, duplicate) {
  * possible for high concurrent volume:
  *
  *  1. Per-scan validation (format, participant auth, campus, ticket) runs
- *     entirely before any lock is taken, using caches so repeat lookups
- *     avoid a sheet read.
+ *     entirely before any lock is taken, using caches and lazy request-local
+ *     snapshots so each validation sheet is read at most once per request.
  *  2. Duplicate detection runs once for the whole batch (one Raw_Scans
  *     read at most, not one per scan), also cache-assisted.
  *  3. The script lock is only acquired if there is something left to
@@ -263,6 +263,10 @@ function processScanBatch(rawItems) {
     return results;
   }
 
+  // Bound expensive sheet work even for distinct unknown tokens/tickets.
+  // Keep snapshots local to this request so new registrations are visible
+  // on the next request, without introducing a negative-ticket cache TTL.
+  const validationData = { participantRows: null, ticketIds: null };
   const accepted = [];
   for (let index = 0; index < rawItems.length; index += 1) {
     const item = normalizeScanInput(rawItems[index]);
@@ -277,7 +281,7 @@ function processScanBatch(rawItems) {
       continue;
     }
 
-    const participant = findActiveParticipantCached(participantSheet, hashToken(item.token));
+    const participant = findActiveParticipantCached(participantSheet, hashToken(item.token), validationData);
 
     // The token is authoritative. The public ID is checked only to detect a
     // modified or accidentally mismatched participant link.
@@ -296,7 +300,7 @@ function processScanBatch(rawItems) {
       continue;
     }
 
-    if (!isValidTicketCached(ticketSheet, item.uuid)) {
+    if (!isValidTicketCached(ticketSheet, item.uuid, validationData)) {
       logDiagnostic('warn', 'scan_rejected', 'invalid_ticket', diagnosticData, participant);
       results.push(errorResult(item.clientId, 'invalid_ticket'));
       continue;
@@ -583,7 +587,7 @@ function requireSheetWithHeaders(spreadsheet, sheetName, requiredHeaders) {
  * static for the duration of an event. See PARTICIPANT_CACHE_TTL_SECONDS
  * for the revocation/rotation tradeoff this implies.
  */
-function findActiveParticipantCached(sheet, tokenHash) {
+function findActiveParticipantCached(sheet, tokenHash, validationData) {
   const cache = CacheService.getScriptCache();
   const cacheKey = PARTICIPANT_CACHE_PREFIX + tokenHash;
   const cached = cache.get(cacheKey);
@@ -591,13 +595,19 @@ function findActiveParticipantCached(sheet, tokenHash) {
     return cached === '' ? null : { id: cached };
   }
 
-  const participant = findActiveParticipant(sheet, tokenHash);
+  const participant = findActiveParticipant(sheet, tokenHash, validationData);
   cache.put(cacheKey, participant ? participant.id : '', PARTICIPANT_CACHE_TTL_SECONDS);
   return participant;
 }
 
-function findActiveParticipant(sheet, tokenHash) {
-  const rows = readDataRows(sheet, SCAN_HEADERS.PARTICIPANTS.length);
+function findActiveParticipant(sheet, tokenHash, validationData) {
+  let rows = validationData && validationData.participantRows;
+  if (!rows) {
+    rows = readDataRows(sheet, SCAN_HEADERS.PARTICIPANTS.length);
+    if (validationData) {
+      validationData.participantRows = rows;
+    }
+  }
   const matchingRows = rows.filter(function(row) {
     return typeof row[2] === 'string' &&
       constantTimeEqual(row[2].toLowerCase(), tokenHash);
@@ -622,31 +632,37 @@ function findActiveParticipant(sheet, tokenHash) {
 /**
  * Cached wrapper around a valid_tickets lookup. Only ever caches a
  * confirmed-true result, so a cache miss (never seen, or the entry
- * expired) always falls back to a live read of the ticket column rather
- * than trusting absence-from-cache as a rejection. This means a UUID can
- * never be authorized because of stale cache state, and a brand-new
- * ticket becomes usable immediately rather than being bounded by the
- * cache TTL.
+ * expired) falls back to the request's lazily loaded ticket snapshot rather
+ * than trusting absence-from-cache as a rejection. Unknown tickets are not
+ * cached across requests, so a brand-new ticket is usable on the next
+ * request after it is added, without waiting for a negative-cache TTL.
  */
-function isValidTicketCached(sheet, uuid) {
+function isValidTicketCached(sheet, uuid, validationData) {
   const cache = CacheService.getScriptCache();
   const cacheKey = VALID_TICKET_CACHE_PREFIX + uuid;
   if (cache.get(cacheKey) === '1') {
     return true;
   }
 
-  const found = ticketExists(sheet, uuid);
+  const found = ticketExists(sheet, uuid, validationData);
   if (found) {
     cache.put(cacheKey, '1', VALID_TICKET_CACHE_TTL_SECONDS);
   }
   return found;
 }
 
-function ticketExists(sheet, uuid) {
-  return readDataRows(sheet, SCAN_HEADERS.VALID_TICKETS.length)
-    .some(function(row) {
-      return String(row[0]).trim().toUpperCase() === uuid;
-    });
+function ticketExists(sheet, uuid, validationData) {
+  let ticketIds = validationData && validationData.ticketIds;
+  if (!ticketIds) {
+    ticketIds = new Set(readDataRows(sheet, SCAN_HEADERS.VALID_TICKETS.length)
+      .map(function(row) {
+        return String(row[0]).trim().toUpperCase();
+      }));
+    if (validationData) {
+      validationData.ticketIds = ticketIds;
+    }
+  }
+  return ticketIds.has(uuid);
 }
 
 function readDataRows(sheet, width) {

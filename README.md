@@ -345,14 +345,28 @@ cache-assisted:
 
 | Cache | Key | TTL | Caches | Miss behavior |
 | --- | --- | --- | --- | --- |
-| Valid ticket | UUID | 5 min | Only confirmed-valid UUIDs | Falls back to a live `valid_tickets` read; a brand-new ticket is usable on the very next scan, not bounded by the TTL |
-| Participant auth | token hash | 60 sec | Both found-active and not-found/inactive | Falls back to a live `participant_url` read |
+| Valid ticket | UUID | 5 min | Only confirmed-valid UUIDs | Uses a lazily loaded, request-local `valid_tickets` snapshot; a new ticket is usable on the next request after it is added, without a negative-cache delay |
+| Participant auth | token hash | 60 sec | Both found-active and not-found/inactive | Uses a lazily loaded, request-local `participant_url` snapshot |
 | Duplicate (`Uni_ID`+`UUID`) | hash of the pair | 6 hours (event-day) | Only confirmed-written pairs | Falls back to a live `Raw_Scans` read |
 
-None of these caches can ever authorize a UUID that isn't genuinely in
-`valid_tickets`: a cache miss always re-checks the sheet before rejecting, so
-"not yet cached" is never treated as "invalid." `valid_tickets` therefore
-remains the sole source of truth.
+A UUID is added to the positive cache only after it is found in
+`valid_tickets`. A cache miss checks the request's live sheet snapshot before
+rejecting, so "not yet cached" is never treated as "invalid." The existing
+five-minute positive-cache lifetime is unchanged.
+
+Each request reads the full participant data range at most once, and the
+ticket column at most once, even for ten distinct unknown tokens or tickets.
+These are lazy snapshots: malformed scans load neither, and the ticket
+column is loaded only after participant and campus authorization. Warm cache
+hits can avoid both data reads. Header checks still run as before.
+
+Snapshots are not shared across requests. Unknown tickets are never cached
+between requests, so a UUID appended by n8n becomes usable on the next
+request after it is added. If it arrives after the current request's ticket
+snapshot was taken, that request still uses its original snapshot. Existing
+mixed-participant batches and per-scan outcomes remain supported. This
+removes per-batch read amplification, not all possible flooding of the
+public endpoint.
 
 The participant cache is the one deliberate tradeoff: because it caches
 *both* outcomes for up to 60 seconds, a just-revoked (`Active` -> `FALSE`) or

@@ -61,6 +61,43 @@ retaining the existing `/exec` URL. Neither `ParticipantLinks.gs` nor the
 frontend needs changing for this fix. Live Apps Script validation and the
 later multi-scanner Playwright stress test have not been performed here.
 
+## Medium Finding — Batch Validation Read Amplification (2026-10-08)
+
+The existing suites passed before implementation. New receiver tests then
+failed with `10 !== 1` for distinct unknown tokens and, independently, for
+unknown ticket IDs. After the request-local snapshot fix, the tests confirm:
+
+- Ten distinct unknown tokens share one participant data read, remain
+  unauthorized, and cause no ticket/scan data reads or scan writes.
+- Ten distinct or repeated invalid ticket IDs share one ticket data read per
+  request, including when the same invalid batch is submitted again.
+- A rejected ticket appended to `valid_tickets` is accepted on the next
+  request; no shared negative-ticket cache was introduced.
+- Ten valid scans mixing regular and campus-configured participants use one
+  participant data read, one ticket data read, and one batched write. Campus
+  values are retained per row.
+- Replays add no rows, both with warm caches and after cache eviction.
+- Malformed scans load neither snapshot; inactive/mismatched credentials
+  and invalid campuses never load ticket data.
+- Token-hash comparison, duplicate-hash rejection, configured-ID validation,
+  ticket trimming/case/numeric-cell handling, and best-effort cache behavior
+  are preserved.
+
+Counts refer to full data-range reads, not the separate header checks.
+Receiver, participant-link, campus-parity, 57 frontend, four email, and seven
+Python report tests pass, as does Python compilation. An independent
+read-only review found no actionable issues. These are local tests
+using fake Apps Script services with the real receiver implementation, not
+proof of live Google quota capacity or event load.
+
+The organizer approved merging/publishing this fix to `main` on 2026-10-08.
+Update only `Code.gs` and create a new version of the existing Apps Script
+web-app deployment, keeping its `/exec` URL.
+No link regeneration, Sheet migration, n8n change, or frontend update is
+needed. Repository publication does not update the live Apps Script backend.
+Organizer-managed deployment, live validation, and the later multi-scanner
+browser test have not been verified for this fix.
+
 ## Apps Script Pre-deployment Check
 
 1. Confirm the Apps Script project is opened from `fair-scan-file`, not the
@@ -301,6 +338,6 @@ present, which is enough to diagnose a symptom without exposing a credential.
 | Item stays pending | Read its on-screen reason (`server_busy`, `server_error`, or `network`); check connectivity, Apps Script executions, deployment access, and the raw POST response |
 | `server_error` response | Verify all three exact tab names and header rows |
 | Old link still works after rotation | Confirm the latest Apps Script version is deployed and the old hash was replaced. This can also be the participant-auth cache: a rotated or just-revoked (`Active` -> `FALSE`) link can keep working for up to 60 seconds after the sheet change, by design — wait a minute and retry before concluding the deployment is stale. |
-| A newly registered visitor's QR is rejected right after registration | Confirm the UUID actually reached `valid_tickets` (n8n write order). It is not a caching delay — a UUID not yet seen by this Apps Script instance always falls back to a live sheet read, so it is usable on the very first scan attempt once it is actually in the sheet. |
+| A newly registered visitor's QR is rejected right after registration | Confirm the UUID actually reached `valid_tickets` (n8n write order). Unknown UUIDs are not cached across requests. If a ticket was added after the current batch's snapshot, it is visible on the next request after the write; there is no negative-cache waiting period. |
 | Many volunteers scanning at once, occasional `server_busy` | Expected under load: the lock wait is now ~2 seconds by design (see README section 9), not 10. Affected scans retry automatically within seconds; this is not a stuck/broken deployment. |
 | A device has a large pending count (dozens+) after a scanning burst | Expected, not stuck. 10 is a per-request transport limit, not a queue cap: `sync()` automatically drains the whole backlog as consecutive 10-scan requests with no volunteer action needed, stopping early only if a batch comes back transient (network/timeout/`server_busy`/`server_error`), in which case the rest is retried automatically on the next 5-second tick. Confirm the count is decreasing, not stuck at the same number. |
