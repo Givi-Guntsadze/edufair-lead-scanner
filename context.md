@@ -1,8 +1,25 @@
 # EduFair Lead Scanner Context
 
-Updated: 2026-10-01
+Updated: 2026-10-08
 
 ## Current State
+
+PR #4 (`codex/fix-unbounded-response-for-oversized-requests`) hardens only
+oversized JSON batch rejection. More than 10 scans now receive a fixed
+`{ results: [], result: 'error', code: 'invalid_request' }` response without
+per-scan normalization, client-ID reflection, spreadsheet access, or locks.
+Normal batches, legacy single-scan POSTs, campus configuration, authentication,
+duplicate handling, and offline storage are unchanged. Added tests cover
+11/1,000/10,000 rejected scans, exactly 10 valid regular/campus scans, duplicate
+retries, and queue retention/retry after the bounded error response.
+See `docs/security-pr-4-review.md` for the review and deployment boundary.
+This fix is included in the 2026-10-08 `main` release after local regression
+testing and independent review. Apps Script deployment and live validation
+remain pending with the organizer. Deploying it requires updating Apps Script
+`Code.gs` and creating a new deployment version
+behind the existing `/exec` URL; no frontend or Sheet migration is required.
+The second security issue and multi-scanner Playwright stress test are deferred
+at the organizer's request.
 
 SRH University (`srhuni`) is included in the 2026-10-01 `main` release in
 `Code.gs` and `index.html`: Berlin, Heidelberg, Leipzig, Dresden, EBS Business
@@ -88,10 +105,10 @@ the entire pending queue is drained (12 scans send as 10 then 2, 100 as ten
 requests of 10, and so on) or a batch comes back with any transient outcome,
 at which point the drain stops early and whatever is left pending is picked
 up automatically on the next retry tick — never lost, only delayed.
-`Code.gs` now rejects (rather than silently truncates) a single request that
+`Code.gs` rejects (rather than silently truncates) a single request that
 somehow arrives with more than 10 scans, since the official frontend never
-sends one and a truncation would otherwise drop scans with no result
-returned for them at all.
+sends one. PR #4 makes that rejection a fixed batch-level error instead of
+allocating and reflecting one error result per submitted scan.
 
 Outside of that pending deployment, the public scanner workflow is unchanged.
 `Code.gs`, `ParticipantLinks.gs`, and `index.html` do not need redeployment

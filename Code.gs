@@ -138,14 +138,12 @@ function handleScanRequest(e) {
       // MAX_BATCH_SIZE is a transport limit the official frontend enforces
       // by chunking locally; it never sends an oversized request. A batch
       // over this size can only come from a non-conforming client, so it is
-      // rejected outright (every submitted scan reported back as
-      // invalid_request) rather than silently truncated, which would
-      // otherwise drop the excess scans with no result at all.
+      // rejected outright with a bounded response rather than iterating over
+      // and reflecting an attacker-controlled number of scans.
       return createResponse({
-        results: batchInput.scans.map(function (rawScan) {
-          const normalized = normalizeScanInput(rawScan);
-          return errorResult(normalized.clientId, 'invalid_request');
-        })
+        results: [],
+        result: 'error',
+        code: 'invalid_request'
       });
     }
     const batchResults = processScanBatch(batchInput.scans);

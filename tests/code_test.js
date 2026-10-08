@@ -796,8 +796,8 @@ for (const value of [
   // request, chunking any larger backlog across consecutive requests
   // instead. A single request that still arrives oversized (only possible
   // from a non-conforming client) is rejected outright rather than
-  // silently truncated, so none of its scans are ever dropped with no
-  // result at all — and it must not write anything.
+  // silently truncated. Its rejection response must stay constant in size
+  // and must not reflect attacker-controlled client IDs.
   const sheets = defaultSheets();
   const uuids = [];
   for (let i = 0; i < 12; i += 1) {
@@ -807,13 +807,74 @@ for (const value of [
   }
   const { context, spreadsheet } = createEnvironment(sheets);
   const rawScans = spreadsheet.getSheetByName('Raw_Scans');
-  const batch = postBatch(context, uuids.map(uuid => ({ uuid })));
-  assert.equal(batch.results.length, 12, 'every submitted scan gets its own result, none silently dropped');
-  for (const scan of batch.scans) {
-    const result = resultFor(batch, scan.client_id);
-    assert.deepEqual(result, { client_id: scan.client_id, result: 'error', code: 'invalid_request' });
-  }
+  const attackerClientId = 'attacker-controlled-id'.repeat(1000);
+  const response = parseResponse(context.doPost({
+    parameter: {},
+    postData: {
+      type: 'application/json',
+      contents: JSON.stringify({
+        scans: uuids.map(uuid => scanInput({ uuid, clientId: attackerClientId }))
+      })
+    }
+  }));
+  assert.deepEqual(response, {
+    results: [],
+    result: 'error',
+    code: 'invalid_request'
+  }, 'oversized batches get one bounded batch-level error');
+  assert.equal(JSON.stringify(response).includes(attackerClientId), false, 'client IDs are not reflected');
   assert.equal(rawScans.getLastRow(), 1, 'an oversized request writes nothing');
+}
+
+for (const count of [11, 1000, 10000]) {
+  const { context, spreadsheet, openedSpreadsheetIds, stats, lockReleases } = createEnvironment();
+  const forbidden = () => { throw new Error('Oversized rejection must not process scans or call services'); };
+  context.normalizeScanInput = forbidden;
+  context.processScanBatch = forbidden;
+  context.CacheService.getScriptCache = forbidden;
+  context.LockService.getScriptLock = forbidden;
+  context.PropertiesService.getScriptProperties = forbidden;
+  context.SpreadsheetApp.openById = forbidden;
+  const output = context.doPost({
+    parameter: {},
+    postData: {
+      type: 'application/json',
+      contents: JSON.stringify({ scans: Array.from({ length: count }, () => ({
+        client_id: 'untrusted-client-id', token: UNKNOWN_TOKEN
+      })) })
+    }
+  });
+  assert.equal(output.text, JSON.stringify({ results: [], result: 'error', code: 'invalid_request' }),
+    `rejection of ${count} unauthenticated scans must have the same fixed response`);
+  assert.deepEqual(openedSpreadsheetIds, []);
+  assert.deepEqual(stats.readCalls, {});
+  assert.deepEqual(stats.writeCalls, {});
+  assert.equal(lockReleases(), 0);
+  assert.equal(spreadsheet.getSheetByName('Raw_Scans').getLastRow(), 1);
+}
+
+{
+  // Exactly 10 legitimate scans, including campus and regular participants,
+  // must still be accepted and duplicate retries must not append more rows.
+  const sheets = defaultSheets();
+  const scans = Array.from({ length: 10 }, (_, index) => {
+    const uuid = 'LIMIT' + String(index).padStart(3, '0');
+    sheets.valid_tickets.push([uuid]);
+    return index % 2 === 0 ? { uuid } : {
+      uuid, participantId: 'ieu', token: CONFIGURED_TOKEN, campus: 'Madrid'
+    };
+  });
+  const { context, spreadsheet } = createEnvironment(sheets);
+  const accepted = postBatch(context, scans);
+  assert.equal(accepted.results.length, 10);
+  assert.ok(accepted.results.every(result => result.result === 'success' && !result.duplicate));
+  const rawScans = spreadsheet.getSheetByName('Raw_Scans');
+  assert.equal(rawScans.getLastRow(), 11);
+  assert.deepEqual(rawScans.rows.slice(1).map(row => row[3]),
+    scans.map(scan => scan.campus || ''));
+  const retry = postBatch(context, scans);
+  assert.ok(retry.results.every(result => result.result === 'success' && result.duplicate));
+  assert.equal(rawScans.getLastRow(), 11);
 }
 
 {
