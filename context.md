@@ -13,8 +13,10 @@ duplicate handling, and offline storage are unchanged. Added tests cover
 11/1,000/10,000 rejected scans, exactly 10 valid regular/campus scans, duplicate
 retries, and queue retention/retry after the bounded error response.
 See `docs/security-pr-4-review.md` for the review and deployment boundary.
-This fix remains on the draft PR branch, not merged or deployed. Deploying it
-requires updating Apps Script `Code.gs` and creating a new deployment version
+This fix is included in the 2026-10-08 `main` release after local regression
+testing and independent review. Apps Script deployment and live validation
+remain pending with the organizer. Deploying it requires updating Apps Script
+`Code.gs` and creating a new deployment version
 behind the existing `/exec` URL; no frontend or Sheet migration is required.
 The second security issue and multi-scanner Playwright stress test are deferred
 at the organizer's request.

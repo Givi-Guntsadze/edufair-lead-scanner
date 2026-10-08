@@ -55,8 +55,9 @@ policy or rate limiting is introduced two days before the event.
 
 ## Deployment boundary
 
-The draft PR is not merged, and the live Apps Script was not modified. After
-approval, copy this branch's `Code.gs` into the scanner-workbook Apps Script
+The reviewed fix is included in the 2026-10-08 `main` release. The live Apps
+Script was not modified; deployment and live validation remain pending with
+the organizer. Copy `main`'s `Code.gs` into the scanner-workbook Apps Script
 project and deploy a new version using the existing `/exec` URL. No token
 rotation, participant-link regeneration, Sheet migration, or frontend
 deployment is needed. Updating GitHub alone does not deploy the receiver.
