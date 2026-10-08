@@ -11,7 +11,13 @@ that Apps Script did not authorize. The frontend now sends the same JSON
 body as `text/plain;charset=UTF-8`, retaining readable responses, credential
 validation, retries, and per-scan response matching. A test covers this
 request contract. A live diagnostic with that header returned success and
-was read back in Raw_Scans; the full 35-institution test is still pending.
+was read back in Raw_Scans. The subsequent live Playwright test verified 700
+unique scans across 35 institutions (18 regular, 17 campus-enabled), with no
+missing, extra, duplicate, or incorrect-campus rows. All 35 browsers reached
+All synced. Capture latency was 163 ms median / 595 ms maximum in this fixture;
+upload confirmation lagged under load, with the last acknowledgement 187
+seconds after the final capture. Offline/reload recovery and duplicate retries
+passed. See `docs/live-stress-test-2026-10-08.md` for evidence and limitations.
 This frontend-only change deploys through GitHub Pages and needs no further
 Apps Script replacement or redeployment.
 
@@ -25,8 +31,9 @@ duplicate handling, and offline storage are unchanged. Added tests cover
 retries, and queue retention/retry after the bounded error response.
 See `docs/security-pr-4-review.md` for the review and deployment boundary.
 This fix is included in the 2026-10-08 `main` release after local regression
-testing and independent review. Apps Script deployment and live validation
-remain pending with the organizer. Deploying it requires updating Apps Script
+testing and independent review. Apps Script deployment was initially pending
+with the organizer; subsequent deployment and live checks are noted above.
+Deploying it requires updating Apps Script
 `Code.gs` and creating a new deployment version
 behind the existing `/exec` URL; no frontend or Sheet migration is required.
 The second, medium-severity issue (batch validation sheet-read amplification)
@@ -46,14 +53,16 @@ boundaries. Only `Code.gs` needs replacing in Apps Script and a new version
 of the existing web-app deployment; no URLs, tokens, Sheets, frontend, or n8n
 changes are required. Apps Script replacement/redeployment remains with the
 organizer. The organizer has since reported redeployment; see the live pilot
-and frontend transport note above. Full multi-scanner validation is pending.
+and frontend transport note above. Full multi-scanner validation is recorded
+in `docs/live-stress-test-2026-10-08.md`.
 
 SRH University (`srhuni`) is included in the 2026-10-01 `main` release in
 `Code.gs` and `index.html`: Berlin, Heidelberg, Leipzig, Dresden, EBS Business
 School, and Undecided, verified against the organizer's Campuses sheet on
 2026-10-01. GitHub Pages publishes the frontend from `main`; the organizer
-will update `Code.gs` and deploy a new Apps Script version behind the existing
-`/exec` URL. Backend deployment and live SRH scanning are not yet verified.
+subsequently updated `Code.gs` and deployed a new version behind the existing
+`/exec` URL. Live SRH scans and campus matching were verified in the
+2026-10-08 stress test.
 La Salle (`lasalle`)
 and Caucasus University (`caucuni`) keep the single-campus scanning flow.
 The participant-link error on row 37 was a trailing ASCII space in
@@ -97,11 +106,12 @@ email template, Python processor) still passes unchanged.
 A high-volume synchronization optimization was implemented on
 `feature/high-volume-sync-optimization` and merged into `main`. The 2026-10-01
 SRH release publishes that existing frontend optimization alongside the campus
-addition. **Apps Script update/redeployment remains organizer-managed and
-unverified**: use the current repository `Code.gs`, which includes both the
-batch receiver and SRH campus allowlist, following `TESTING.md`'s
-"High-Volume Synchronization — Deployment" section. Do not test SRH campus
-scans against the old receiver; it will reject those choices as `invalid_campus`.
+addition. Apps Script redeployment was initially organizer-managed and
+unverified; the organizer reported redeployment and the 2026-10-08 live test
+verified batch uploads and SRH campus matching. Future deployments must use
+the current repository `Code.gs`, following `TESTING.md`'s "High-Volume
+Synchronization — Deployment" section. Old receivers without the SRH
+allowlist reject those campus choices as `invalid_campus`.
 The optimization targets the real event-day load: 30+ participant tables
 scanning simultaneously, one volunteer scanning several visitors
 back-to-back, and the same visitor legitimately being scanned by multiple
@@ -137,7 +147,7 @@ somehow arrives with more than 10 scans, since the official frontend never
 sends one. PR #4 makes that rejection a fixed batch-level error instead of
 allocating and reflecting one error result per submitted scan.
 
-Outside of that pending deployment, the public scanner workflow is unchanged.
+The public scanner workflow is otherwise unchanged.
 `Code.gs`, `ParticipantLinks.gs`, and `index.html` do not need redeployment
 for the `Which Fair` reporting-only change described below.
 
