@@ -54,16 +54,60 @@ edufair-lead-scanner/
 The original restricted Google Sheets file contains only the `Registrations`
 tab and the full registration data, including each eight-character UUID.
 
-For each completed registration, the n8n workflow must perform these operations
-in order:
+For each completed registration, the n8n workflow (`LEAF - Fair Registrations`)
+performs these operations in order:
 
 1. Generate the UUID.
-2. Append the full registration, including `Which Fair`, to `Registrations`.
-3. Append that same UUID, with no PII, to `fair-scan-file` -> `valid_tickets`.
-4. Send the confirmation email and QR code only after both writes succeed.
+2. Save the full registration to the n8n data table
+   `leaf_fair_registrations_log` (write-ahead log; a failure here does not stop
+   the registration).
+3. Append the registration, including `Which Fair`, to `Registrations` using
+   the Google Sheets "Minimise API Calls" (`useAppend`) option.
+4. Wait 6-10 seconds, read column `UUID` back, and retry the append with random
+   delays (up to 4 attempts) if the row is missing.
+5. Send the confirmation email and QR code, then subscribe the address to
+   Moosend.
 
-The n8n Google Sheets node for `valid_tickets` maps the generated identifier to
-the `UUID` column.
+`fair-scan-file` -> `valid_tickets` is **not written by the workflow**. Its
+column A is a formula (see below), so a valid ticket always equals a
+registration.
+
+### Why this design
+
+Concurrent Google Sheets appends silently lose rows: n8n reported success while
+rows were overwritten. In a 20-post burst test the original flow kept 2 of 20
+registrations, and `useAppend` alone only reached 5 of 20. The log, read-back
+and retry reached 20 of 20, and the audit repairs the rare remainder. Do not
+remove the read-back step, and do not write to `valid_tickets` from n8n.
+
+### Audit workflow
+
+`LEAF - Fair Registrations Audit` runs on a schedule (hourly during
+registration, daily or weekly after a fair) and:
+
+- re-appends any logged registration that is missing from `Registrations`
+  (ignoring the last 5 minutes) and then fails on purpose, so the error
+  workflow emails an alert;
+- fails with a `HEALTH:` alert if `valid_tickets` shows a formula error, is
+  empty, or has fewer tickets than `Registrations`;
+- fails with a `HEALTH:` alert if recent registrations are missing from the log.
+
+Its sheet reads use "Execute Once" so they read the whole sheet once per run.
+When editing n8n workflows through the API or MCP, publish afterwards: a saved
+draft is not what the schedule runs.
+
+### Starting a new edition (for example spring)
+
+1. Duplicate the registration workflow and give it its own webhook path.
+2. Create a new data table for the log and a new `Registrations` sheet, or
+   decide deliberately to share the existing ones.
+3. Duplicate the audit workflow and repoint its data table, `Registrations`
+   sheet, the `valid_tickets` sheet and the launch date hardcoded in
+   `Code - Check log coverage`.
+4. Repoint the `valid_tickets` formula if the Registrations sheet changed.
+5. Run a 20-post burst test on scratch tabs before launch, then run the audit
+   hourly at first. Check your n8n plan's execution limit before running it
+   every few minutes.
 
 ## 2. Scanner Workbook
 
@@ -88,6 +132,17 @@ Capture" below); other scans leave it blank.
 
 | UUID |
 | --- |
+
+Cell `A1` must stay `UUID`; the Apps Script checks it. Cell `A2` holds this
+formula, which fills the column from the `Registrations` sheet:
+
+```
+=LET(r, IMPORTRANGE("<Registrations sheet id>", "Registrations!M2:M"), FILTER(r, r<>""))
+```
+
+The first use needs a one-time "Allow access" click. Never type or paste values
+under `A2`: that blocks the formula and shows `#REF!`, so the scanner would
+reject every ticket.
 
 Only organizers should have access to this workbook. A generated `Scanner_URL`
 contains a bearer token and must be treated like a credential.
