@@ -82,13 +82,17 @@ def merge_data(registrations: pd.DataFrame, scans: pd.DataFrame) -> pd.DataFrame
         scans,
         registrations,
         on='UUID',
-        how='left'
+        how='left',
+        indicator=True
     )
     
-    # Check for unmatched scans
-    unmatched = merged[merged['Name'].isna() if 'Name' in merged.columns else merged.iloc[:, 0].isna()]
+    # Scans with no registration would only produce blank report rows, so omit them
+    unmatched = merged[merged['_merge'] == 'left_only']
     if len(unmatched) > 0:
-        print(f"⚠️  Warning: {len(unmatched)} scans could not be matched to registrations")
+        print(f"⚠️  Warning: {len(unmatched)} scans could not be matched to registrations and were omitted:")
+        for _, row in unmatched.iterrows():
+            print(f"     {row['UUID']} (scanned by {row.get('Uni_ID', '?')})")
+    merged = merged[merged['_merge'] == 'both'].drop(columns='_merge')
     
     print(f"✓ Merged data: {len(merged)} records")
     
