@@ -477,9 +477,17 @@ trimmed automatically): `timestamp`, `Name`, `Last Name`, `Email`, `Phone`,
 4. Run:
 
 ```powershell
-pip install -r requirements.txt
+pip install --require-hashes -r requirements.lock
 python scripts/process_leads.py
 ```
+
+Dependencies (updated 2026-11-18): `requirements.txt` holds the human-edited
+ranges (`pandas>=2.0.0`); `requirements.lock` is the hash-locked install set
+generated from it with `pip-compile --generate-hashes --strip-extras
+--allow-unsafe --output-file requirements.lock requirements.txt` on Python
+3.12 (pandas 3.1.1, numpy 2.5.5). pandas 3 was tested against pandas 2.3.3 on
+real event data and produced byte-identical reports, so no upper bound is set.
+After editing `requirements.txt`, recompile the lock and re-run the tests.
 
 The script joins the two files by UUID and creates `reports/leads_<Uni_ID>.csv`
 for every participant with accepted scans. `participant_url` and
